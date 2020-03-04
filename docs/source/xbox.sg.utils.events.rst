@@ -1,4 +1,4 @@
-Event - Gevent greenlet wrapper
+Event - asyncio task wrapper
 ===============================
 
 .. automodule:: xbox.sg.utils.events

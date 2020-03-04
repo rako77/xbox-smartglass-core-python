@@ -8,11 +8,10 @@ import sys
 import logging
 import argparse
 import functools
+import asyncio
+import aioconsole
 
 from logging.handlers import RotatingFileHandler
-from code import InteractiveConsole
-
-from gevent import signal, backdoor
 
 from xbox.scripts import TOKENS_FILE, CONSOLES_FILE, LOG_FMT, \
     LOG_LEVEL_DEBUG_INCL_PACKETS, VerboseFormatter, ExitCodes
@@ -28,8 +27,7 @@ from xbox.sg.console import Console
 from xbox.sg.enum import ConnectionState
 
 # REST server imports
-from gevent import pywsgi as rest_pywsgi
-from xbox.rest.app import app as flask_app
+from xbox.rest.app import app as rest_app
 
 
 LOGGER = logging.getLogger(__name__)
@@ -293,13 +291,13 @@ def choose_console_interactively(console_list):
     return console_list[int(response)]
 
 
-def cli_discover_consoles(args):
+async def cli_discover_consoles(args):
     """
     Discover consoles
     """
     LOGGER.info('Sending discovery packets to IP: {0}'
                 .format('IP: ' + args.address if args.address else '<MULTICAST>'))
-    discovered = Console.discover(addr=args.address, timeout=1)
+    discovered = await Console.discover(addr=args.address, timeout=1)
 
     if not len(discovered):
         LOGGER.error('No consoles discovered')
@@ -320,12 +318,18 @@ def cli_discover_consoles(args):
     return discovered
 
 
-def main(command=None):
+async def main_async(eventloop, command=None):
     """
-    Main entrypoint
+    Async Main entrypoint
+
+    Args:
+        eventloop (asyncio.AbstractEventLoop):
+        command (Commands):
+
+    Returns:
+         None
     """
     auth_manager = None
-    repl_server_handle = None  # Used for Command.REPLServer
 
     if command:
         # Take passed command and append actual cmdline
@@ -377,9 +381,7 @@ def main(command=None):
             args.bind, args.port
         ))
 
-        server = rest_pywsgi.WSGIServer((args.bind, args.port), flask_app)
-        server.serve_forever()
-        sys.exit(ExitCodes.OK)
+        return eventloop.create_task(rest_app.run_task(args.bind, args.port))
     elif command == Commands.TUI:
         """
         Text user interface (powered by urwid)
@@ -390,7 +392,7 @@ def main(command=None):
             LOGGER.debug('Removing StreamHandler {0} from root logger'.format(h))
             logging.root.removeHandler(h)
 
-        sys.exit(tui.run_tui(args.consoles, args.address,
+        sys.exit(tui.run_tui(eventloop, args.consoles, args.address,
                              args.liveid, args.tokens, args.refresh))
 
     elif 'tokens' in args:
@@ -416,13 +418,13 @@ def main(command=None):
         LOGGER.info('Sending poweron packet for LiveId: {0} to {1}'
                     .format(args.liveid,
                             'IP: ' + args.address if args.address else '<MULTICAST>'))
-        Console.power_on(args.liveid, args.address, tries=10)
+        await Console.power_on(args.liveid, args.address, tries=10)
         sys.exit(0)
 
     """
     Discovery
     """
-    discovered = cli_discover_consoles(args)
+    discovered = await cli_discover_consoles(args)
 
     if command == Commands.Discover:
         """
@@ -440,7 +442,7 @@ def main(command=None):
         """Powering off all discovered consoles"""
         for c in discovered:
             print('Powering off console {0}'.format(c))
-            c.power_off()
+            await c.power_off()
         sys.exit(ExitCodes.OK)
 
     """
@@ -484,7 +486,7 @@ def main(command=None):
     LOGGER.debug('XToken: {0}'.format(xtoken))
 
     LOGGER.info('Attempting connection...')
-    state = console.connect(userhash, xtoken.jwt)
+    state = await console.connect(userhash, xtoken.jwt)
     if state != ConnectionState.Connected:
         LOGGER.error('Connection failed! Console: {0}'.format(console))
         sys.exit(1)
@@ -492,19 +494,18 @@ def main(command=None):
     # FIXME: Waiting explicitly
     LOGGER.info('Connected to console: {0}'.format(console))
     LOGGER.debug('Waiting a second before proceeding...')
-    console.wait(1)
+    await console.wait(1)
 
     if command == Commands.PowerOff:
         """
         Power off (single console)
         """
         print('Powering off console {0}'.format(console))
-        console.power_off()
+        await console.power_off()
         sys.exit(ExitCodes.OK)
 
     elif command == Commands.REPL or \
             command == Commands.REPLServer:
-
         banner = 'You are connected to the console @ {0}\n'\
                  .format(console.address)
         banner += 'Type in \'console\' to acccess the object\n'
@@ -514,8 +515,9 @@ def main(command=None):
 
         if command == Commands.REPL:
             LOGGER.info('Starting up local REPL console')
-            repl_local = InteractiveConsole(locals=scope_vars)
-            repl_local.interact(banner)
+            console = aioconsole.AsynchronousConsole(locals=scope_vars, loop=eventloop)
+            await console.interact(banner)
+
         else:
 
             if args.port == 0:
@@ -527,10 +529,9 @@ def main(command=None):
             print(startinfo)
             LOGGER.info(startinfo)
 
-            repl_server_handle = backdoor.BackdoorServer(
-                listener=(args.bind, args.port),
-                banner=banner,
-                locals=scope_vars)
+            server = await aioconsole.start_interactive_server(
+                host=args.bind, port=args.port, loop=eventloop)
+            await server
 
     elif command == Commands.FalloutRelay:
         """
@@ -539,7 +540,7 @@ def main(command=None):
         print('Starting Fallout 4 relay service...')
         console.add_manager(TitleManager)
         console.title.on_connection_info += fallout4_relay.on_connection_info
-        console.start_title_channel(title_id=fallout4_relay.FALLOUT_TITLE_ID)
+        await console.start_title_channel(title_id=fallout4_relay.FALLOUT_TITLE_ID)
         print('Fallout 4 relay started')
     elif command == Commands.GamepadInput:
         """
@@ -547,7 +548,7 @@ def main(command=None):
         """
         print('Starting gamepad input handler...')
         console.add_manager(manager.InputManager)
-        gamepad_input.input_loop(console)
+        await gamepad_input.input_loop(console)
     elif command == Commands.TextInput:
         """
         Text input
@@ -558,19 +559,22 @@ def main(command=None):
         console.text.on_systemtext_input += functools.partial(text_input.on_text_input, console)
         console.text.on_systemtext_done += text_input.on_text_done
 
-    LOGGER.debug('Installing gevent SIGINT handler')
-    signal.signal(signal.SIGINT, lambda *a: console.protocol.stop())
 
-    if repl_server_handle:
-        LOGGER.debug('Starting REPL server protocol')
+def main(command=None):
+    eventloop = asyncio.get_event_loop()
 
-    LOGGER.debug('Starting console.protocol.serve_forever()')
-    console.protocol.serve_forever()
+    LOGGER.debug('Entering main_async')
+    main_coro = main_async(eventloop, command)
 
-    LOGGER.debug('Protocol serving exited')
-    if repl_server_handle:
-        LOGGER.debug('Stopping REPL server protocol')
-        repl_server_handle.stop()
+    try:
+        LOGGER.debug('Calling eventloop.run_forever')
+        eventloop.run_until_complete(main_coro)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # cleanup
+        main_coro.close()
+        eventloop.close()
 
 
 def main_discover():

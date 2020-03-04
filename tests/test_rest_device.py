@@ -1,18 +1,23 @@
+import pytest
 from http import HTTPStatus
 
 
-def test_device_overview(rest_client):
-    resp = rest_client.test_client().get('/device')
+@pytest.mark.asyncio
+async def test_device_overview(rest_client):
+    resp = await rest_client.test_client().get('/device')
+    resp_json = await resp.json
 
     assert resp.status_code == HTTPStatus.OK
-    assert resp.json['success'] is True
+    assert resp_json['success'] is True
 
 
-def test_device_poweron(rest_client, console_liveid):
-    resp = rest_client.test_client().get('/device/{0}/poweron'.format(console_liveid))
+@pytest.mark.asyncio
+async def test_device_poweron(rest_client, console_liveid):
+    resp = await rest_client.test_client().get('/device/{0}/poweron'.format(console_liveid))
+    resp_json = await resp.json
 
     assert resp.status_code == HTTPStatus.OK
-    assert resp.json['success'] is True
+    assert resp_json['success'] is True
 
 
 def test_device_info():
@@ -87,9 +92,10 @@ def test_text_send():
     pass
 
 
-def test_media_status(rest_client_connected_media_console_status, console_liveid):
+@pytest.mark.asyncio
+async def test_media_status(rest_client_connected_media_console_status, console_liveid):
     client = rest_client_connected_media_console_status
-    resp = client.test_client().get('/device/{0}/media_status'.format(console_liveid))
+    resp = await client.test_client().get('/device/{0}/media_status'.format(console_liveid))
 
     assert resp.status_code == HTTPStatus.OK
     assert resp.json['success'] is True
@@ -119,9 +125,10 @@ def test_media_status(rest_client_connected_media_console_status, console_liveid
     assert metadata['subtitle'] == ''
 
 
-def test_console_status(rest_client_connected_media_console_status, console_liveid):
+@pytest.mark.asyncio
+async def test_console_status(rest_client_connected_media_console_status, console_liveid):
     client = rest_client_connected_media_console_status
-    resp = client.test_client().get('/device/{0}/console_status'.format(console_liveid))
+    resp = await client.test_client().get('/device/{0}/console_status'.format(console_liveid))
 
     assert resp.status_code == HTTPStatus.OK
     assert resp.json['success'] is True

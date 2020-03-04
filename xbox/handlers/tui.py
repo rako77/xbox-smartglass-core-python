@@ -8,11 +8,6 @@ import json
 import urwid
 import logging
 from binascii import hexlify
-from collections import deque
-
-import gevent
-import gevent.select
-import gevent.signal
 
 from xbox.webapi.scripts.tui import WebAPIDisplay
 
@@ -288,11 +283,11 @@ class ConsoleList(urwid.Frame):
         super(ConsoleList, self).__init__(view, header=header, footer=footer)
         self.walker[:] = [ConsoleButton(self.app, c) for c in self.consoles]
 
-    def refresh(self):
-        gevent.spawn(self._refresh)
+    async def refresh(self):
+        await self._refresh()
 
-    def _refresh(self):
-        discovered = Console.discover(blocking=True)
+    async def _refresh(self):
+        discovered = await Console.discover(blocking=True)
 
         liveids = [d.liveid for d in discovered]
         for i, c in enumerate(self.consoles):
@@ -595,13 +590,14 @@ class SGDisplay(object):
     def do_quit(self):
         raise urwid.ExitMainLoop()
 
-    def run(self):
+    def run(self, loop):
+        eventloop = urwid.AsyncioEventLoop(loop=loop)
         self.loop = urwid.MainLoop(
             urwid.SolidFill('x'),
             handle_mouse=False,
             palette=self.palette,
             unhandled_input=self.unhandled_input,
-            event_loop=GeventLoop()
+            event_loop=eventloop
         )
 
         self.loop.set_alarm_in(0.0001, lambda *args: self.view_main_menu())
@@ -613,74 +609,6 @@ class SGDisplay(object):
             self.pop_view(self)
         elif input in ('l', 'L'):
             self.view_log()
-
-
-# https://github.com/what-studio/urwid-geventloop
-class GeventLoop(object):
-    def __init__(self):
-        super(GeventLoop, self).__init__()
-        self._completed_greenlets = deque()
-        self._idle_callbacks = []
-        self._idle_event = gevent.event.Event()
-
-    def _greenlet_completed(self, greenlet):
-        self._completed_greenlets.append(greenlet)
-        self._idle_event.set()
-
-    # alarm
-    def alarm(self, seconds, callback):
-        greenlet = gevent.spawn_later(seconds, callback)
-        greenlet.link(self._greenlet_completed)
-        return greenlet
-
-    def remove_alarm(self, handle):
-        if not handle.dead or handle.ready():
-            handle.kill()
-            return True
-        return False
-
-    # file
-    def _watch_file(self, fd, callback):
-        while True:
-            gevent.select.select([fd], [], [])
-            gevent.spawn(callback).link(self._greenlet_completed)
-
-    def watch_file(self, fd, callback):
-        greenlet = gevent.spawn(self._watch_file, fd, callback)
-        greenlet.link(self._greenlet_completed)
-        return greenlet
-
-    def remove_watch_file(self, handle):
-        handle.kill()
-        return True
-
-    # idle
-    def enter_idle(self, callback):
-        self._idle_callbacks.append(callback)
-        return callback
-
-    def remove_enter_idle(self, handle):
-        try:
-            self._idle_callbacks.remove(handle)
-        except KeyError:
-            return False
-        return True
-
-    # signal
-    def set_signal_handler(self, signum, handler):
-        gevent.signal.signal(signum, handler)
-
-    def run(self):
-        try:
-            while True:
-                for callback in self._idle_callbacks:
-                    callback()
-                while len(self._completed_greenlets) > 0:
-                    self._completed_greenlets.popleft().get(block=False)
-                if self._idle_event.wait(timeout=1):
-                    self._idle_event.clear()
-        except urwid.ExitMainLoop:
-            pass
 
 
 def load_consoles(filepath):
@@ -698,11 +626,12 @@ def save_consoles(filepath, consoles):
         json.dump(consoles, fh, indent=2)
 
 
-def run_tui(consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
+def run_tui(loop, consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
     """
     Main entrypoint for TUI
 
     Args:
+        loop (AbstractEventLoop): Eventloop
         consoles_filepath (str): Console json filepath
         addr (str): IP address of console
         liveid (str): LiveID to connect to
@@ -724,7 +653,7 @@ def run_tui(consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
         return ExitCodes.AuthenticationError
 
     app = SGDisplay(consoles, app.auth_mgr)
-    app.run()
+    app.run(loop)
 
     if consoles_filepath:
         save_consoles(consoles_filepath, app.consoles.consoles)

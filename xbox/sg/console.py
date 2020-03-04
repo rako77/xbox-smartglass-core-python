@@ -34,20 +34,18 @@ Example:
             sys.exit(1)
 """
 
-import gevent
+import asyncio
 from uuid import UUID
 
 from xbox.sg.crypto import Crypto
 from xbox.sg.manager import Manager
 from xbox.sg.enum import PairedIdentityState, DeviceStatus, ConnectionState,\
     MessageType, PrimaryDeviceFlag, ActiveTitleLocation
-from xbox.sg.protocol import CoreProtocol, ProtocolError
+from xbox.sg.protocol import SmartglassProtocol, ProtocolError
 from xbox.sg.utils.events import Event
 
 
 class Console(object):
-    __protocol__ = CoreProtocol()
-
     def __init__(self, address, name, uuid, liveid, flags=PrimaryDeviceFlag.Null, last_error=0, public_key=None):
         """
         Initialize an instance of Console
@@ -92,7 +90,8 @@ class Console(object):
 
         self.power_on = self._power_on  # Dirty hack
 
-        self._init_protocol()
+        self.protocol = None
+        self.transport = None
 
     def __repr__(self):
         return '<Console addr={} name={} uuid={} liveid={} flags={} last_error={}>'.format(
@@ -106,7 +105,7 @@ class Console(object):
         self.disconnect()
 
     @staticmethod
-    def wait(seconds):
+    async def wait(seconds):
         """
         Wrapper around `gevent.sleep`
 
@@ -115,23 +114,31 @@ class Console(object):
 
         Returns: None
         """
-        gevent.sleep(seconds)
-
-    def _init_protocol(self):
-        self.protocol = CoreProtocol(self.address, self._crypto)
-        # Proxy protocol event into console
-        self.protocol.on_timeout += self._on_timeout
-        self.protocol.on_message += self._on_message
+        await asyncio.sleep(seconds)
 
     @classmethod
-    def __start_cls_protocol(cls):
-        """
-        Start the protocol internally, if not running
+    async def setup_protocol(cls, loop, address=None, crypto=None):
+        sock = SmartglassProtocol.get_multicast_enabled_socket()
+        transport, protocol = await loop.create_datagram_endpoint(
+            lambda: SmartglassProtocol(loop, address, crypto),
+            sock=sock,
+        )
 
-        Returns: None
+        return transport, protocol
+
+    async def _ensure_protocol_started(self):
         """
-        if not cls.__protocol__.started:
-            cls.__protocol__.start()
+        Regular protocol instance, setup with crypto and destination address.
+        Targeted at communication with a specific console.
+
+        Returns:
+            None
+        """
+        if not self.protocol:
+            loop = asyncio.get_running_loop()
+            transport, protocol = await Console.setup_protocol(loop, self.address, self._crypto)
+            self.transport = transport
+            self.protocol = protocol
 
     @classmethod
     def from_message(cls, address, msg):
@@ -200,7 +207,7 @@ class Console(object):
         return object.__getattribute__(self, k)
 
     @classmethod
-    def discover(cls, *args, **kwargs):
+    async def discover(cls, *args, **kwargs):
         """
         Discover consoles on the network.
 
@@ -212,8 +219,9 @@ class Console(object):
             list: List of discovered consoles.
 
         """
-        cls.__start_cls_protocol()
-        discovered = cls.__protocol__.discover(*args, **kwargs)
+        loop = asyncio.get_running_loop()
+        transport, protocol = await cls.setup_protocol(loop)
+        discovered = await protocol.discover(*args, **kwargs)
         return [cls.from_message(a, m) for a, m in discovered.items()]
 
     @classmethod
@@ -229,7 +237,7 @@ class Console(object):
         return [cls.from_message(a, m) for a, m in discovered.items()]
 
     @classmethod
-    def power_on(cls, liveid, addr=None, tries=2):
+    async def power_on(cls, liveid, addr=None, tries=2):
         """
         Power On console with given Live ID.
 
@@ -245,13 +253,14 @@ class Console(object):
         Returns: None
 
         """
-        cls.__start_cls_protocol()
-        cls.__protocol__.power_on(liveid, addr, tries)
+        loop = asyncio.get_running_loop()
+        transport, protocol = await cls.setup_protocol(loop)
+        await protocol.power_on(liveid, addr, tries)
 
-    def _power_on(self, tries=2):
-        Console.power_on(self.liveid, self.address, tries)
+    async def _power_on(self, tries=2):
+        await Console.power_on(self.liveid, self.address, tries)
 
-    def connect(self, userhash=None, xsts_token=None):
+    async def connect(self, userhash=None, xsts_token=None):
         """
         Connect to the console
 
@@ -273,15 +282,14 @@ class Console(object):
             raise ConnectionError("Anonymous connection not allowed, please"
                                   " supply userhash and auth-token")
 
-        if not self.protocol.started:
-            self.protocol.start()
+        await self._ensure_protocol_started()
 
         self.pairing_state = PairedIdentityState.NotPaired
         self.connection_state = ConnectionState.Connecting
 
         try:
-            self.pairing_state = self.protocol.connect(userhash=userhash,
-                                                       xsts_token=xsts_token)
+            self.pairing_state = await self.protocol.connect(userhash=userhash,
+                                                             xsts_token=xsts_token)
         except ProtocolError as e:
             self.connection_state = ConnectionState.Error
             raise e
@@ -289,7 +297,7 @@ class Console(object):
         self.connection_state = ConnectionState.Connected
         return self.connection_state
 
-    def launch_title(self, uri, location=ActiveTitleLocation.Full):
+    async def launch_title(self, uri, location=ActiveTitleLocation.Full):
         """
         Launch a title by URI
 
@@ -300,9 +308,9 @@ class Console(object):
         Returns:
             int: Member of :class:`AckStatus`
         """
-        return self.protocol.launch_title(uri, location)
+        return await self.protocol.launch_title(uri, location)
 
-    def game_dvr_record(self, start_delta, end_delta):
+    async def game_dvr_record(self, start_delta, end_delta):
         """
         Start Game DVR recording
 
@@ -313,9 +321,9 @@ class Console(object):
         Returns:
             int: Member of :class:`AckStatus`
         """
-        return self.protocol.game_dvr_record(start_delta, end_delta)
+        return await self.protocol.game_dvr_record(start_delta, end_delta)
 
-    def disconnect(self):
+    async def disconnect(self):
         """
         Disconnect from console.
 
@@ -329,7 +337,7 @@ class Console(object):
             self.protocol.stop()  # Stop also sends SG disconnect message
             self._reset_state()
 
-    def power_off(self):
+    async def power_off(self):
         """
         Power off the console.
 
@@ -337,7 +345,7 @@ class Console(object):
 
         Returns: None
         """
-        self.protocol.power_off(self.liveid)
+        await self.protocol.power_off(self.liveid)
         self._reset_state()
         self.device_status = DeviceStatus.Unavailable
 

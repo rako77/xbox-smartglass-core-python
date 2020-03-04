@@ -8,10 +8,9 @@ import uuid
 import json
 import base64
 import logging
-import gevent
-import gevent.event
-from gevent import socket
-from gevent.server import DatagramServer
+import socket
+
+import asyncio
 
 from xbox.sg import factory, packer
 from xbox.sg.packet.message import message_structs
@@ -20,7 +19,7 @@ from xbox.sg.enum import PacketType, ConnectionResult, DisconnectReason,\
 from xbox.sg.constants import WindowsClientInfo, MessageTarget
 from xbox.sg.utils.events import Event
 
-log = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 PORT = 5050
 BROADCAST = '<broadcast>'
@@ -42,10 +41,10 @@ class ProtocolError(Exception):
     pass
 
 
-class CoreProtocol(DatagramServer):
+class SmartglassProtocol:
     HEARTBEAT_INTERVAL = 3.0
 
-    def __init__(self, address=None, crypto=None):
+    def __init__(self, loop, address=None, crypto=None):
         """
         Instantiate Smartglass Protocol handler.
 
@@ -53,6 +52,8 @@ class CoreProtocol(DatagramServer):
             address (str): Optional IP address to send all packets to
             crypto (:class:`.Crypto`): Instance of crypto context
         """
+        self._loop = loop
+
         self.addr = address
         self.crypto = crypto
 
@@ -71,37 +72,41 @@ class CoreProtocol(DatagramServer):
         self.on_message = Event()
         self.on_json = Event()
 
-        super(DatagramServer, self).__init__(('*:0'))
+        self.transport = None
+        self.started = False
+
+    def connection_made(self, transport):
+        self.transport = transport
+        self.started = True
+
+    def datagram_received(self, data, addr):
+        self.handle(data, addr)
+
+    def error_received(self, exc):
+        print('Error received:', exc)
+
+    def connection_lost(self, exc):
+        print("Connection closed")
+        self.transport.close()
+        self.started = False
 
     @classmethod
-    def get_listener(cls, *args, **kwargs):
-        sock = DatagramServer.get_listener(*args, **kwargs)
+    def get_multicast_enabled_socket(cls):
+        addrinfo = socket.getaddrinfo(MULTICAST, None)[0]
+
+        sock = socket.socket(addrinfo[0], socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
         return sock
 
-    def stop(self, *args, **kwargs):
-        """
-        Stop protocol.
-
-        Disconnect from console, then stop the protocol handler.
-
-        Args:
-            *args: Args
-            **kwargs: KwArgs
-
-        Returns: None
-        """
-        if self.started:
-            try:
-                self.disconnect()  # Best effort disconnect
-            except Exception:
-                pass
-            super(DatagramServer, self).stop(*args, **kwargs)
-
-    def send_message(self, msg, channel=ServiceChannel.Core, addr=None,
-                     blocking=True, timeout=5, retries=3):
+    async def send_message(
+            self,
+            msg,
+            channel=ServiceChannel.Core, addr=None,
+            blocking=True,
+            timeout=5,
+            retries=3
+    ):
         """
         Send message to console.
 
@@ -146,7 +151,7 @@ class CoreProtocol(DatagramServer):
 
         if msg.header.pkt_type == PacketType.Message \
                 and msg.header.flags.need_ack and blocking:
-            log.debug(
+            LOGGER.debug(
                 "Sending %s message on ServiceChannel %s to %s",
                 msg.header.flags.msg_type.name, channel.name, addr,
                 extra={'_msg': msg}
@@ -157,14 +162,14 @@ class CoreProtocol(DatagramServer):
 
             while tries < retries and not result:
                 if tries > 0:
-                    log.warning(
+                    LOGGER.warning(
                         "Message %s on ServiceChannel %s to %s not ack'd in time, attempt #%d",
                         msg.header.flags.msg_type.name, channel.name, addr, tries + 1,
                         extra={'_msg': msg}
                     )
 
-                self.socket.sendto(data, (addr, PORT))
-                result = self._await_ack('ack_%i' % seqn, timeout)
+                self.transport.sendto(data, (addr, PORT))
+                result = await self._await_ack('ack_%i' % seqn, timeout)
                 tries += 1
 
             if result:
@@ -172,9 +177,12 @@ class CoreProtocol(DatagramServer):
 
             raise ProtocolError("Exceeded retries")
         elif msg.header.pkt_type == PacketType.ConnectRequest:
-            log.debug("Sending ConnectRequest to %s", addr, extra={'_msg': msg})
+            LOGGER.debug("Sending ConnectRequest to %s", addr, extra={'_msg': msg})
 
-        self.socket.sendto(data, (addr, PORT))
+        if self.transport:
+            self.transport.sendto(data, (addr, PORT))
+        else:
+            LOGGER.error('Transport not ready...')
 
     def handle(self, data, addr):
         """
@@ -195,12 +203,12 @@ class CoreProtocol(DatagramServer):
                 msg = packer.unpack(data)
 
             if msg.header.pkt_type == PacketType.DiscoveryResponse:
-                log.debug("Received DiscoverResponse from %s", host, extra={'_msg': msg})
+                LOGGER.debug("Received DiscoverResponse from %s", host, extra={'_msg': msg})
                 self._discovered[host] = msg
                 self.on_discover(host, msg)
 
             elif msg.header.pkt_type == PacketType.ConnectResponse:
-                log.debug("Received ConnectResponse from %s", host, extra={'_msg': msg})
+                LOGGER.debug("Received ConnectResponse from %s", host, extra={'_msg': msg})
                 if 'connect' in self._pending:
                     self._set_result('connect', msg)
 
@@ -211,7 +219,7 @@ class CoreProtocol(DatagramServer):
                 if msg.header.flags.is_fragment:
                     message_info = 'MessageFragment ({0})'.format(message_info)
 
-                log.debug(
+                LOGGER.debug(
                     "Received %s message on ServiceChannel %s from %s",
                     message_info, channel.name, host, extra={'_msg': msg}
                 )
@@ -219,8 +227,8 @@ class CoreProtocol(DatagramServer):
                 self._seq_mgr.add_received(seq_num)
 
                 if msg.header.flags.need_ack:
-                    self.ack(
-                        [msg.header.sequence_number], [], ServiceChannel.Core
+                    asyncio.create_task(
+                        self.ack([msg.header.sequence_number], [], ServiceChannel.Core)
                     )
 
                 self._seq_mgr.low_watermark = seq_num
@@ -233,7 +241,7 @@ class CoreProtocol(DatagramServer):
                         return
 
                     msg(protected_payload=fragment_payload)
-                    log.debug("Assembled {0} (Seq {1}:{2})".format(
+                    LOGGER.debug("Assembled {0} (Seq {1}:{2})".format(
                         message_info, sequence_begin, sequence_end
                     ), extra={'_msg': msg})
 
@@ -241,9 +249,9 @@ class CoreProtocol(DatagramServer):
             else:
                 self._on_unk(msg)
         except Exception:
-            log.exception("Exception in CoreProtocol datagram handler")
+            LOGGER.exception("Exception in CoreProtocol datagram handler")
 
-    def _await_ack(self, identifier, timeout=5):
+    async def _await_ack(self, identifier, timeout=5):
         """
         Wait for acknowledgement of message
 
@@ -254,10 +262,14 @@ class CoreProtocol(DatagramServer):
         Returns:
             :obj:`.Event`: Event
         """
-        evnt = gevent.event.AsyncResult()
-        self._pending[identifier] = evnt
+        fut = asyncio.Future()
+        self._pending[identifier] = fut
 
-        return evnt.wait(timeout)
+        try:
+            await asyncio.wait_for(fut, timeout)
+            return fut.result()
+        except asyncio.exceptions.TimeoutError:
+            return None
 
     def _set_result(self, identifier, result):
         """
@@ -265,14 +277,14 @@ class CoreProtocol(DatagramServer):
 
         Args:
             identifier (str): Identifier of ack
-            result (int): Ack status
+            result (object): Ack status
 
         Returns: None
         """
-        self._pending[identifier].set(result)
+        self._pending[identifier].set_result(result)
         del self._pending[identifier]
 
-    def _heartbeat(self):
+    async def _heartbeat_task(self):
         """
         Greenlet checking for console activity, firing `on_timeout`-event on timeout.
 
@@ -283,12 +295,12 @@ class CoreProtocol(DatagramServer):
         """
         while self.started:
             try:
-                self.ack([], [], ServiceChannel.Core, need_ack=True)
+                await self.ack([], [], ServiceChannel.Core, need_ack=True)
             except ProtocolError:
                 self.on_timeout()
-                self.stop()
+                self.connection_lost(TimeoutError())
                 break
-            gevent.sleep(self.HEARTBEAT_INTERVAL)
+            await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
     def _on_message(self, msg, channel):
         """
@@ -356,7 +368,7 @@ class CoreProtocol(DatagramServer):
 
         self.on_json(text, channel)
 
-    def discover(self, addr=None, tries=5, blocking=True, timeout=5):
+    async def discover(self, addr=None, tries=5, blocking=True, timeout=5):
         """
         Discover consoles on the network
 
@@ -373,24 +385,27 @@ class CoreProtocol(DatagramServer):
         self._discovered = {}
         msg = factory.discovery()
 
-        greenlet = gevent.spawn(self._discover, msg, addr, tries)
+        task = asyncio.create_task(self._discover(msg, addr, tries))
 
         # Blocking for a discovery is different than connect or regular message
         if blocking:
-            with gevent.Timeout(timeout, False):
-                greenlet.join()
+            try:
+                await asyncio.wait_for(task, timeout)
+            except asyncio.exceptions.TimeoutError:
+
+                pass
 
         return self.discovered
 
-    def _discover(self, msg, addr, tries):
+    async def _discover(self, msg, addr, tries):
         for _ in range(tries):
-            self.send_message(msg, addr=BROADCAST)
-            self.send_message(msg, addr=MULTICAST)
+            await self.send_message(msg, addr=BROADCAST)
+            await self.send_message(msg, addr=MULTICAST)
 
             if addr:
-                self.send_message(msg, addr=addr)
+                await self.send_message(msg, addr=addr)
 
-            gevent.sleep(0.5)
+            await asyncio.sleep(0.5)
 
     @property
     def discovered(self):
@@ -402,8 +417,14 @@ class CoreProtocol(DatagramServer):
         """
         return self._discovered
 
-    def connect(self, userhash, xsts_token, client_uuid=uuid.uuid4(),
-                request_num=0, retries=3):
+    async def connect(
+            self,
+            userhash,
+            xsts_token,
+            client_uuid=uuid.uuid4(),
+            request_num=0,
+            retries=3
+    ):
         """
         Connect to console
 
@@ -450,9 +471,9 @@ class CoreProtocol(DatagramServer):
         result = None
         while tries < retries and not result:
             for m in messages:
-                self.send_message(m)
+                await self.send_message(m)
 
-            result = self._await_ack('connect')
+            result = await self._await_ack('connect')
 
         if not result:
             raise ProtocolError("Exceeded connect retries")
@@ -466,15 +487,15 @@ class CoreProtocol(DatagramServer):
         self.target_participant_id = 0
         self.source_participant_id = result.protected_payload.participant_id
 
-        self.local_join()
+        await self.local_join()
 
         for channel, target_uuid in CHANNEL_MAP.items():
-            self.start_channel(channel, target_uuid)
+            await self.start_channel(channel, target_uuid)
 
-        gevent.spawn_later(self.HEARTBEAT_INTERVAL, self._heartbeat)
+        asyncio.create_task(self._heartbeat_task())
         return result.protected_payload.pairing_state
 
-    def local_join(self, client_info=WindowsClientInfo, **kwargs):
+    async def local_join(self, client_info=WindowsClientInfo, **kwargs):
         """
         Pair client with console.
 
@@ -486,9 +507,9 @@ class CoreProtocol(DatagramServer):
         Returns: None
         """
         msg = factory.local_join(client_info)
-        return self.send_message(msg, **kwargs)
+        await self.send_message(msg, **kwargs)
 
-    def start_channel(self, channel, messagetarget_uuid, title_id=0, activity_id=0, **kwargs):
+    async def start_channel(self, channel, messagetarget_uuid, title_id=0, activity_id=0, **kwargs):
         """
         Request opening of specific ServiceChannel
 
@@ -503,9 +524,9 @@ class CoreProtocol(DatagramServer):
         """
         request_id = self._chl_mgr.get_next_request_id(channel)
         msg = factory.start_channel(request_id, title_id, messagetarget_uuid, activity_id)
-        return self.send_message(msg, **kwargs)
+        await self.send_message(msg, **kwargs)
 
-    def ack(self, processed, rejected, channel, need_ack=False):
+    async def ack(self, processed, rejected, channel, need_ack=False):
         """
         Acknowledge received messages that have `need_ack` flag set.
 
@@ -522,9 +543,9 @@ class CoreProtocol(DatagramServer):
         msg = factory.acknowledge(
             low_watermark, processed, rejected, need_ack=need_ack
         )
-        self.send_message(msg, channel=channel, blocking=need_ack)
+        await self.send_message(msg, channel=channel, blocking=need_ack)
 
-    def json(self, data, channel):
+    async def json(self, data, channel):
         """
         Send json message
 
@@ -535,9 +556,9 @@ class CoreProtocol(DatagramServer):
         Returns: None
         """
         msg = factory.json(data)
-        self.send_message(msg, channel=channel)
+        await self.send_message(msg, channel=channel)
 
-    def power_on(self, liveid, addr=None, tries=2):
+    async def power_on(self, liveid, addr=None, tries=2):
         """
         Power on console.
 
@@ -551,14 +572,14 @@ class CoreProtocol(DatagramServer):
         msg = factory.power_on(liveid)
 
         for i in range(tries):
-            self.send_message(msg, addr=BROADCAST)
-            self.send_message(msg, addr=MULTICAST)
+            await self.send_message(msg, addr=BROADCAST)
+            await self.send_message(msg, addr=MULTICAST)
             if addr:
-                self.send_message(msg, addr=addr)
+                await self.send_message(msg, addr=addr)
 
-            gevent.sleep(0.1)
+            await asyncio.sleep(0.1)
 
-    def power_off(self, liveid):
+    async def power_off(self, liveid):
         """
         Power off console
 
@@ -568,9 +589,9 @@ class CoreProtocol(DatagramServer):
         Returns: None
         """
         msg = factory.power_off(liveid)
-        self.send_message(msg)
+        await self.send_message(msg)
 
-    def disconnect(self, reason=DisconnectReason.Unspecified, error=0):
+    async def disconnect(self, reason=DisconnectReason.Unspecified, error=0):
         """
         Disconnect console session
 
@@ -581,9 +602,9 @@ class CoreProtocol(DatagramServer):
         Returns: None
         """
         msg = factory.disconnect(reason, error)
-        self.send_message(msg)
+        await self.send_message(msg)
 
-    def game_dvr_record(self, start_delta, end_delta):
+    async def game_dvr_record(self, start_delta, end_delta):
         """
         Start Game DVR recording
 
@@ -595,9 +616,9 @@ class CoreProtocol(DatagramServer):
             int: Member of :class:`AckStatus`
         """
         msg = factory.game_dvr_record(start_delta, end_delta)
-        return self.send_message(msg)
+        await self.send_message(msg)
 
-    def launch_title(self, uri, location=ActiveTitleLocation.Full):
+    async def launch_title(self, uri, location=ActiveTitleLocation.Full):
         """
         Launch title via URI
 
@@ -609,7 +630,7 @@ class CoreProtocol(DatagramServer):
             int: Member of :class:`AckStatus`
         """
         msg = factory.title_launch(location, uri)
-        return self.send_message(msg)
+        await self.send_message(msg)
 
 
 class SequenceManager(object):
@@ -745,7 +766,7 @@ class ChannelManager(object):
         self._channel_mapping[channel] = channel_id
 
         self._requests.pop(request_id)
-        log.debug("Acquired ServiceChannel %s -> Channel: 0x%x", channel.name, channel_id)
+        LOGGER.debug("Acquired ServiceChannel %s -> Channel: 0x%x", channel.name, channel_id)
         return channel
 
     def get_next_request_id(self, channel):

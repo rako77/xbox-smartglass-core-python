@@ -1,5 +1,5 @@
-from flask import current_app as app
-from flask import request, render_template
+from quart import current_app as app
+from quart import request, render_template
 from http import HTTPStatus
 from xbox.webapi.authentication.manager import AuthenticationManager,\
     AuthenticationException, TwoFactorAuthRequired
@@ -37,10 +37,11 @@ def authentication_login():
 
 
 @routes.route('/auth/login', methods=['POST'])
-def authentication_login_post():
-    is_webview = request.form.get('webview')
-    email_address = request.form.get('email')
-    password = request.form.get('password')
+async def authentication_login_post():
+    request_form = await request.form
+    is_webview = request_form.get('webview')
+    email_address = request_form.get('email')
+    password = request_form.get('password')
 
     if app.authentication_mgr.authenticated:
         return app.error('An account is already signed in.. please logout first', HTTPStatus.BAD_REQUEST)
@@ -106,8 +107,9 @@ def authentication_logout():
 
 
 @routes.route('/auth/logout', methods=['POST'])
-def authentication_logout_post():
-    is_webview = request.form.get('webview')
+async def authentication_logout_post():
+    request_form = await request.form
+    is_webview = request_form.get('webview')
     username = app.logged_in_gamertag
     app.reset_authentication()
     if is_webview:
@@ -141,10 +143,11 @@ def authentication_oauth():
 
 
 @routes.route('/auth/oauth', methods=['POST'])
-def authentication_oauth_post():
-    is_webview = request.form.get('webview')
+async def authentication_oauth_post():
+    request_form = await request.form
+    is_webview = request_form.get('webview')
     app.reset_authentication()
-    redirect_uri = request.form.get('redirect_uri')
+    redirect_uri = request_form.get('redirect_uri')
     if not redirect_uri:
         return app.error('Please provide redirect_url', HTTPStatus.BAD_REQUEST)
 

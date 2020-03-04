@@ -1,14 +1,11 @@
 import sys
-
-from gevent import monkey
-monkey.patch_all()
-
-from xbox.scripts import main_cli  # noqa: E402
+from xbox.scripts import main_cli
 
 
 def main():
     print('Starting REST server from dedicated script')
-    return sys.exit(main_cli.main('rest'))
+    main_cli.main('rest')
+    return sys.exit(0)
 
 
 if __name__ == '__main__':

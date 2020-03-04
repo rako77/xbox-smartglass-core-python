@@ -44,15 +44,16 @@ setup(
         'xbox-webapi>=1.1.8',
         'construct==2.10.56',
         'cryptography==2.8',
-        'gevent==1.5a3',
+        'aioconsole',
         'dpkt',
         'marshmallow-objects',
-        'Flask'
+        'quart'
     ],
     setup_requires=['pytest-runner'],
     tests_require=[
         'pytest',
         'pytest-console-scripts',
+        'pytest-asyncio',
         'flake8',
         'tox'
     ],
@@ -66,7 +67,8 @@ setup(
             'coverage',
             'pytest',
             'pytest-runner',
-            'pytest-console-scripts'
+            'pytest-console-scripts',
+            'pytest-asyncio'
         ]
     },
     test_suite="tests",

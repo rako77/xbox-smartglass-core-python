@@ -1,4 +1,4 @@
-from flask import Blueprint
+from quart import Blueprint
 routes = Blueprint('routes', __name__)
 
 from .index import *  # noqa: F401,F403

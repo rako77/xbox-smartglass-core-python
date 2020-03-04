@@ -1,7 +1,6 @@
 import logging
-
 import gevent
-from gevent.server import StreamServer
+import asyncio
 
 from xbox.sg.crypto import PKCS7Padding
 from xbox.sg.utils.events import Event
@@ -76,43 +75,57 @@ class ConsoleConnection(object):
             self._socket.send(packet)
 
 
+class LocalConnection(asyncio.Protocol):
+    data_received_event = Event()
+    connection_made_event = Event()
+
+    def connection_made(self, transport):
+        self.transport = transport
+        self.connection_made(transport)
+
+    def data_received(self, data):
+        self.data_received(data)
+
+    def close_connection(self):
+        print('Close the client socket')
+        self.transport.close()
+
+
 class AuxiliaryRelayService(object):
-    def __init__(self, connection_info, listen_port):
+    def __init__(self, loop, connection_info, listen_port):
         if len(connection_info.endpoints) > 1:
             raise Exception('Auxiliary Stream advertises more than one endpoint!')
 
+        self._loop = loop
         self.crypto = AuxiliaryStreamCrypto.from_connection_info(connection_info)
         self.target_ip = connection_info.endpoints[0].ip
         self.target_port = connection_info.endpoints[0].port
 
         self.console_connection = ConsoleConnection(self.target_ip, self.target_port, self.crypto)
-        self.server = StreamServer(('0.0.0.0', listen_port), self._handle_client)
-        self.client_socket = None
+        self.server = self._loop.create_server(
+            lambda: LocalConnection(),
+            '0.0.0.0', listen_port)
 
-    def run(self):
-        self.server.start()
+        self.client_transport = None
 
-    def _handle_client(self, socket, addr):
-        self.client_socket = socket
+    async def run(self):
+        async with self.server as local_connection:
+            local_connection.data_received_event += self._handle_client_data
+            local_connection.connection_made_event += self.connection_made
+            self.server.serve_forever()
+
+    def connection_made(self, transport):
+        self.client_transport = transport
+        peername = transport.get_extra_info('peername')
+        print('Connection from {}'.format(peername))
 
         self.console_connection.on_message += self._handle_console_data
         self.console_connection.start()
 
-        while True:
-            gevent.socket.wait_read(self.client_socket.fileno())
-            data = self.client_socket.recv(2048)
-            if not data:
-                self.client_socket.close()
-                self.client_socket = None
-                log.warning('Client Socket closed!\n')
-                break
-            else:
-                self._handle_client_data(data)
-
     def _handle_console_data(self, data):
         # Data from console gets decrypted and forwarded to aux client
-        if self.client_socket:
-            self.client_socket.send(data)
+        if self.client_transport:
+            self.client_transport.send(data)
 
     def _handle_client_data(self, data):
         # Data from aux client gets encrypted and sent to console
