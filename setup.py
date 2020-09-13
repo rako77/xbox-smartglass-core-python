@@ -84,9 +84,9 @@ setup(
             'xbox-gamepadinput=xbox.scripts.main_cli:main_gamepadinput',
             'xbox-tui=xbox.scripts.main_cli:main_tui',
             'xbox-fo4-relay=xbox.scripts.main_cli:main_falloutrelay',
+            'xbox-rest-server=xbox.scripts.main_cli:main_rest',
             'xbox-pcap=xbox.scripts.pcap:main',
             'xbox-recrypt=xbox.scripts.recrypt:main',
-            'xbox-rest-server=xbox.scripts.rest_server:main'
         ]
     }
 )

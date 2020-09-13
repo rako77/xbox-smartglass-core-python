@@ -590,7 +590,7 @@ class SGDisplay(object):
     def do_quit(self):
         raise urwid.ExitMainLoop()
 
-    def run(self, loop):
+    async def run(self, loop):
         eventloop = urwid.AsyncioEventLoop(loop=loop)
         self.loop = urwid.MainLoop(
             urwid.SolidFill('x'),
@@ -601,8 +601,7 @@ class SGDisplay(object):
         )
 
         self.loop.set_alarm_in(0.0001, lambda *args: self.view_main_menu())
-        self.consoles.refresh()
-        self.loop.run()
+        await self.consoles.refresh()
 
     def unhandled_input(self, input):
         if input in ('q', 'Q', 'esc'):
@@ -626,7 +625,7 @@ def save_consoles(filepath, consoles):
         json.dump(consoles, fh, indent=2)
 
 
-def run_tui(loop, consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
+async def run_tui(loop, consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
     """
     Main entrypoint for TUI
 
@@ -653,7 +652,7 @@ def run_tui(loop, consoles_filepath, addr, liveid, tokens_filepath, do_refresh):
         return ExitCodes.AuthenticationError
 
     app = SGDisplay(consoles, app.auth_mgr)
-    app.run(loop)
+    await app.run(loop)
 
     if consoles_filepath:
         save_consoles(consoles_filepath, app.consoles.consoles)

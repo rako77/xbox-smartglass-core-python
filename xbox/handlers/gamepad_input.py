@@ -6,7 +6,7 @@ Send controller input via stdin (terminal) to the console
 import sys
 import logging
 
-import gevent.socket
+# import gevent.socket
 
 from xbox.sg.enum import GamePadButton
 

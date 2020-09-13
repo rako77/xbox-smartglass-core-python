@@ -1,5 +1,5 @@
 import logging
-import gevent
+# import gevent
 import asyncio
 
 from xbox.sg.crypto import PKCS7Padding

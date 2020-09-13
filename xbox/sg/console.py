@@ -107,7 +107,7 @@ class Console(object):
     @staticmethod
     async def wait(seconds):
         """
-        Wrapper around `gevent.sleep`
+        Wrapper around `asyncio.sleep`
 
         Args:
             seconds (int): Seconds to wait.

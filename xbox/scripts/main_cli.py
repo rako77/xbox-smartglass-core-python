@@ -184,14 +184,8 @@ def parse_arguments(args=None):
         '--consoles', '-c', default=CONSOLES_FILE,
         help="Previously discovered consoles (json)")
 
-    # FIXME: If possible include startup for REST server here too
     """
     REST server
-    NOTE: Only argument parsing is handled in here,
-          The actual start code is in a dedicated script.
-
-          This is required due to gevent monkey patching for
-          the FLASK web-framework to work.
     """
     subparsers.add_parser(
         Commands.RESTServer,
@@ -346,16 +340,12 @@ async def main_async(eventloop, command=None):
     command = args.command
     LOGGER.debug('Chosen command: {0}'.format(command))
 
-    if command == Commands.RESTServer:
-        LOGGER.info('Make sure you used the dedicated \'xbox-rest-server\' script'
-                    ' to start the REST server!')
-
-    elif 'interactive' in args and args.interactive and \
+    if 'interactive' in args and args.interactive and \
          (args.address or args.liveid):
         LOGGER.error('Flag \'--interactive\' is incompatible with'
                      ' providing an IP address (--address) or LiveID (--liveid) explicitly')
         sys.exit(ExitCodes.ArgParsingError)
-    elif args.liveid and args.address:
+    elif command != Commands.RESTServer and args.liveid and args.address:
         LOGGER.warning('You passed --address AND --liveid: Will only use that specific'
                        'combination!')
     elif command == Commands.PowerOff and args.all and (args.liveid or args.address):
@@ -381,7 +371,7 @@ async def main_async(eventloop, command=None):
             args.bind, args.port
         ))
 
-        return eventloop.create_task(rest_app.run_task(args.bind, args.port))
+        await rest_app.run_task(args.bind, args.port)
     elif command == Commands.TUI:
         """
         Text user interface (powered by urwid)
@@ -392,8 +382,8 @@ async def main_async(eventloop, command=None):
             LOGGER.debug('Removing StreamHandler {0} from root logger'.format(h))
             logging.root.removeHandler(h)
 
-        sys.exit(tui.run_tui(eventloop, args.consoles, args.address,
-                             args.liveid, args.tokens, args.refresh))
+        await tui.run_tui(eventloop, args.consoles, args.address,
+                          args.liveid, args.tokens, args.refresh)
 
     elif 'tokens' in args:
         """
@@ -620,6 +610,11 @@ def main_gamepadinput():
 def main_tui():
     """Entrypoint for TUI script"""
     main(Commands.TUI)
+
+
+def main_rest():
+    """Entrypoint for REST server"""
+    main(Commands.RESTServer)
 
 
 if __name__ == '__main__':
