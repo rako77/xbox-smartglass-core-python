@@ -8,16 +8,21 @@ import uuid
 import json
 import base64
 import logging
-import socket
 
 import asyncio
+import socket
 
-from xbox.sg import factory, packer
+from typing import List, Optional, Tuple, Dict, Union
+
+from xbox.sg import factory, packer, crypto, console
 from xbox.sg.packet.message import message_structs
 from xbox.sg.enum import PacketType, ConnectionResult, DisconnectReason,\
-    ServiceChannel, MessageType, AckStatus, SGResultCode, ActiveTitleLocation
-from xbox.sg.constants import WindowsClientInfo, MessageTarget
+    ServiceChannel, MessageType, AckStatus, SGResultCode, ActiveTitleLocation,\
+    PairedIdentityState, PublicKeyType
+from xbox.sg.constants import WindowsClientInfo, AndroidClientInfo,\
+    MessageTarget
 from xbox.sg.utils.events import Event
+from xbox.sg.utils.struct import XStruct
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,28 +46,24 @@ class ProtocolError(Exception):
     pass
 
 
-class SmartglassProtocol:
+class SmartglassProtocol(asyncio.DatagramProtocol):
     HEARTBEAT_INTERVAL = 3.0
 
-    def __init__(self, loop, address=None, crypto=None):
+    def __init__(
+        self
+    ):
         """
         Instantiate Smartglass Protocol handler.
-
-        Args:
-            address (str): Optional IP address to send all packets to
-            crypto (:class:`.Crypto`): Instance of crypto context
         """
-        self._loop = loop
-
-        self.addr = address
-        self.crypto = crypto
+        self._transport: Optional[asyncio.DatagramTransport] = None
+        self.crypto: Optional[crypto.Crypto] = None
 
         self._discovered = {}
 
         self.target_participant_id = None
         self.source_participant_id = None
 
-        self._pending = {}
+        self._pending: Dict[str, asyncio.Future] = {}
         self._chl_mgr = ChannelManager()
         self._seq_mgr = SequenceManager()
         self._frg_mgr = FragmentManager()
@@ -72,55 +73,43 @@ class SmartglassProtocol:
         self.on_message = Event()
         self.on_json = Event()
 
-        self.transport = None
         self.started = False
 
-    def connection_made(self, transport):
-        self.transport = transport
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.started = True
+        self._transport = transport
 
-    def datagram_received(self, data, addr):
-        self.handle(data, addr)
+    def error_received(self, exc: OSError):
+        print('Error received:', exc.args)
 
-    def error_received(self, exc):
-        print('Error received:', exc)
-
-    def connection_lost(self, exc):
+    def connection_lost(self, exc: Optional[Exception]):
         print("Connection closed")
-        self.transport.close()
+        self._transport.close()
         self.started = False
-
-    @classmethod
-    def get_multicast_enabled_socket(cls):
-        addrinfo = socket.getaddrinfo(MULTICAST, None)[0]
-
-        sock = socket.socket(addrinfo[0], socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return sock
 
     async def send_message(
-            self,
-            msg,
-            channel=ServiceChannel.Core, addr=None,
-            blocking=True,
-            timeout=5,
-            retries=3
-    ):
+        self,
+        msg,
+        channel=ServiceChannel.Core,
+        addr: Optional[str] = None,
+        blocking: bool = True,
+        timeout: int = 5,
+        retries: int = 3
+    ) -> Optional[XStruct]:
         """
         Send message to console.
 
         Packing and encryption happens here.
 
         Args:
-            msg (:obj:`XStruct`): Unassembled message to send
-            channel (:class:`ServiceChannel`): Channel to send the message on,
+            msg: Unassembled message to send
+            channel: Channel to send the message on,
                            Enum member of `ServiceChannel`
-            addr (str): IP address of target console
-            blocking (bool): If set and `msg` is `Message`-packet, wait for ack
-            timeout (int): Seconds to wait for ack, only useful if `blocking`
+            addr: IP address of target console
+            blocking: If set and `msg` is `Message`-packet, wait for ack
+            timeout: Seconds to wait for ack, only useful if `blocking`
                            is `True`
-            retries (int): Max retry count.
+            retries: Max retry count.
 
         Returns: None
 
@@ -135,16 +124,10 @@ class SmartglassProtocol:
                 channel_id=self._chl_mgr.get_channel_id(channel)
             )
 
-        if self.addr:
-            addr = self.addr
-
         if self.crypto:
             data = packer.pack(msg, self.crypto)
         else:
             data = packer.pack(msg)
-
-        if not addr:
-            raise ProtocolError("No address specified in send_message")
 
         if not data:
             raise ProtocolError("No data")
@@ -163,12 +146,13 @@ class SmartglassProtocol:
             while tries < retries and not result:
                 if tries > 0:
                     LOGGER.warning(
-                        "Message %s on ServiceChannel %s to %s not ack'd in time, attempt #%d",
-                        msg.header.flags.msg_type.name, channel.name, addr, tries + 1,
+                        f"Message {msg.header.flags.msg_type.name} on "
+                        f"ServiceChannel {channel.name} to {addr} not ack'd "
+                        f"in time, attempt #{tries + 1}",
                         extra={'_msg': msg}
                     )
 
-                self.transport.sendto(data, (addr, PORT))
+                await self.send(data, addr, PORT)
                 result = await self._await_ack('ack_%i' % seqn, timeout)
                 tries += 1
 
@@ -177,20 +161,25 @@ class SmartglassProtocol:
 
             raise ProtocolError("Exceeded retries")
         elif msg.header.pkt_type == PacketType.ConnectRequest:
-            LOGGER.debug("Sending ConnectRequest to %s", addr, extra={'_msg': msg})
+            LOGGER.debug(
+                f"Sending ConnectRequest to {addr}", extra={'_msg': msg}
+            )
 
-        if self.transport:
-            self.transport.sendto(data, (addr, PORT))
+        await self.send(data, addr, PORT)
+
+    async def send(self, data: bytes, addr: str, port: int):
+        if self._transport:
+            self._transport.sendto(data, (addr, port) if addr and port else None)
         else:
             LOGGER.error('Transport not ready...')
 
-    def handle(self, data, addr):
+    def datagram_received(self, data: bytes, addr: str) -> None:
         """
         Handle incoming smartglass packets
 
         Args:
-            data (bytes): Raw packet
-            addr (str): IP address of sender
+            data: Raw packet
+            addr: IP address of sender
 
         Returns: None
         """
@@ -203,12 +192,18 @@ class SmartglassProtocol:
                 msg = packer.unpack(data)
 
             if msg.header.pkt_type == PacketType.DiscoveryResponse:
-                LOGGER.debug("Received DiscoverResponse from %s", host, extra={'_msg': msg})
+                LOGGER.debug(
+                    f"Received DiscoverResponse from {host}",
+                    extra={'_msg': msg}
+                )
                 self._discovered[host] = msg
                 self.on_discover(host, msg)
 
             elif msg.header.pkt_type == PacketType.ConnectResponse:
-                LOGGER.debug("Received ConnectResponse from %s", host, extra={'_msg': msg})
+                LOGGER.debug(
+                    f"Received ConnectResponse from {host}",
+                    extra={'_msg': msg}
+                )
                 if 'connect' in self._pending:
                     self._set_result('connect', msg)
 
@@ -228,7 +223,11 @@ class SmartglassProtocol:
 
                 if msg.header.flags.need_ack:
                     asyncio.create_task(
-                        self.ack([msg.header.sequence_number], [], ServiceChannel.Core)
+                        self.ack(
+                            [msg.header.sequence_number],
+                            [],
+                            ServiceChannel.Core
+                        )
                     )
 
                 self._seq_mgr.low_watermark = seq_num
@@ -251,13 +250,21 @@ class SmartglassProtocol:
         except Exception:
             LOGGER.exception("Exception in CoreProtocol datagram handler")
 
-    async def _await_ack(self, identifier, timeout=5):
+    @staticmethod
+    def _on_unk(msg) -> None:
+        LOGGER.error(f'Unhandled message: {msg}')
+
+    async def _await_ack(
+        self,
+        identifier: str,
+        timeout: int = 5
+    ) -> Optional[XStruct]:
         """
         Wait for acknowledgement of message
 
         Args:
-            identifier (str): Identifier of ack
-            timeout (int): Timeout in seconds
+            identifier: Identifier of ack
+            timeout: Timeout in seconds
 
         Returns:
             :obj:`.Event`: Event
@@ -268,27 +275,32 @@ class SmartglassProtocol:
         try:
             await asyncio.wait_for(fut, timeout)
             return fut.result()
-        except asyncio.exceptions.TimeoutError:
+        except asyncio.TimeoutError:
             return None
 
-    def _set_result(self, identifier, result):
+    def _set_result(
+        self,
+        identifier: str,
+        result: Union[AckStatus, XStruct]
+    ) -> None:
         """
         Called when an acknowledgement comes in, unblocks `_await_ack`
 
         Args:
-            identifier (str): Identifier of ack
-            result (object): Ack status
+            identifier: Identifier of ack
+            result: Ack status
 
         Returns: None
         """
         self._pending[identifier].set_result(result)
         del self._pending[identifier]
 
-    async def _heartbeat_task(self):
+    async def _heartbeat_task(self) -> None:
         """
-        Greenlet checking for console activity, firing `on_timeout`-event on timeout.
+        Task checking for console activity, firing `on_timeout`-event on
+        timeout.
 
-        Heartbeats are empty "ack" messages that are to be ack'd by the console.
+        Heartbeats are empty "ack" messages that are to be ack'd by the console
 
         Returns:
             None
@@ -302,13 +314,13 @@ class SmartglassProtocol:
                 break
             await asyncio.sleep(self.HEARTBEAT_INTERVAL)
 
-    def _on_message(self, msg, channel):
+    def _on_message(self, msg: XStruct, channel: ServiceChannel) -> None:
         """
         Handle msg of type `Message`.
 
         Args:
-            msg (:class:`.XStruct`): Message
-            channel (:class:`ServiceChannel`): Channel the message was received on
+            msg: Message
+            channel: Channel the message was received on
 
         Returns: None
         """
@@ -327,12 +339,12 @@ class SmartglassProtocol:
         # Then our hooked handlers
         self.on_message(msg, channel)
 
-    def _on_ack(self, msg):
+    def _on_ack(self, msg: XStruct) -> None:
         """
         Process acknowledgement message.
 
         Args:
-            msg (:class:`.XStruct`): Message
+            msg: Message
 
         Returns: None
         """
@@ -348,13 +360,13 @@ class SmartglassProtocol:
             if identifier in self._pending:
                 self._set_result(identifier, AckStatus.Rejected)
 
-    def _on_json(self, msg, channel):
+    def _on_json(self, msg: XStruct, channel: ServiceChannel) -> None:
         """
         Process json message.
 
         Args:
-            msg (:class:`.XStruct`): Message
-            channel (:class:`ServiceChannel`): Channel the message was received on
+            msg: Message
+            channel: Channel the message was received on
 
         Returns: None
         """
@@ -368,7 +380,13 @@ class SmartglassProtocol:
 
         self.on_json(text, channel)
 
-    async def discover(self, addr=None, tries=5, blocking=True, timeout=5):
+    async def discover(
+            self,
+            addr: str = None,
+            tries: int = 5,
+            blocking: bool = True,
+            timeout: int = 5
+    ) -> Dict[str, XStruct]:
         """
         Discover consoles on the network
 
@@ -391,13 +409,18 @@ class SmartglassProtocol:
         if blocking:
             try:
                 await asyncio.wait_for(task, timeout)
-            except asyncio.exceptions.TimeoutError:
+            except asyncio.TimeoutError:
 
                 pass
 
         return self.discovered
 
-    async def _discover(self, msg, addr, tries):
+    async def _discover(
+        self,
+        msg,
+        addr: str,
+        tries: int
+    ) -> None:
         for _ in range(tries):
             await self.send_message(msg, addr=BROADCAST)
             await self.send_message(msg, addr=MULTICAST)
@@ -408,35 +431,34 @@ class SmartglassProtocol:
             await asyncio.sleep(0.5)
 
     @property
-    def discovered(self):
+    def discovered(self) -> Dict[str, XStruct]:
         """
         Return discovered consoles
 
         Returns:
-            dict: Discovered consoles
+            Discovered consoles
         """
         return self._discovered
 
     async def connect(
-            self,
-            userhash,
-            xsts_token,
-            client_uuid=uuid.uuid4(),
-            request_num=0,
-            retries=3
-    ):
+        self,
+        userhash: str,
+        xsts_token: str,
+        client_uuid: uuid.UUID = uuid.uuid4(),
+        request_num: int = 0,
+        retries: int = 3
+    ) -> PairedIdentityState:
         """
         Connect to console
 
         Args:
-            userhash (str): Userhash from Xbox Live Authentication
-            xsts_token (str): XSTS Token from Xbox Live Authentication
-            client_uuid (UUID): Client UUID (default: Generate random uuid)
-            request_num (int): Request number
-            retries (int): Max. connect attempts
+            userhash: Userhash from Xbox Live Authentication
+            xsts_token: XSTS Token from Xbox Live Authentication
+            client_uuid: Client UUID (default: Generate random uuid)
+            request_num: Request number
+            retries: Max. connect attempts
 
-        Returns:
-            int: Pairing State
+        Returns: Pairing State
 
         Raises:
             ProtocolError: If connection fails
@@ -495,13 +517,16 @@ class SmartglassProtocol:
         asyncio.create_task(self._heartbeat_task())
         return result.protected_payload.pairing_state
 
-    async def local_join(self, client_info=WindowsClientInfo, **kwargs):
+    async def local_join(
+        self,
+        client_info: Union[WindowsClientInfo, AndroidClientInfo] = WindowsClientInfo,
+        **kwargs
+    ) -> None:
         """
         Pair client with console.
 
         Args:
-            client_info (`ClientInfo`): Either `WindowsClientInfo` or
-                                        `AndroidClientInfo`
+            client_info: Either `WindowsClientInfo` or `AndroidClientInfo`
             **kwargs:
 
         Returns: None
@@ -509,33 +534,50 @@ class SmartglassProtocol:
         msg = factory.local_join(client_info)
         await self.send_message(msg, **kwargs)
 
-    async def start_channel(self, channel, messagetarget_uuid, title_id=0, activity_id=0, **kwargs):
+    async def start_channel(
+        self,
+        channel: ServiceChannel,
+        messagetarget_uuid: uuid.UUID,
+        title_id: int = 0,
+        activity_id: int = 0,
+        **kwargs
+    ) -> None:
         """
         Request opening of specific ServiceChannel
 
         Args:
-            channel (:class:`ServiceChannel`): Channel to start
-            messagetarget_uuid (UUID): Message Target UUID
-            title_id (int): Title ID, Only used for ServiceChannel.Title
-            activity_id (int): Activity ID, unknown use-case
+            channel: Channel to start
+            messagetarget_uuid: Message Target UUID
+            title_id: Title ID, Only used for ServiceChannel.Title
+            activity_id: Activity ID, unknown use-case
             **kwargs: KwArgs
 
         Returns: None
         """
         request_id = self._chl_mgr.get_next_request_id(channel)
-        msg = factory.start_channel(request_id, title_id, messagetarget_uuid, activity_id)
+        msg = factory.start_channel(
+            request_id, title_id, messagetarget_uuid, activity_id
+        )
         await self.send_message(msg, **kwargs)
 
-    async def ack(self, processed, rejected, channel, need_ack=False):
+    async def ack(
+        self,
+        processed: List[int],
+        rejected: List[int],
+        channel: ServiceChannel,
+        need_ack: bool = False
+    ) -> None:
         """
         Acknowledge received messages that have `need_ack` flag set.
 
         Args:
-            processed (list): Processed sequence numbers
-            rejected (list): Rejected sequence numbers
-            channel (:class:`ServiceChannel`): Channel to send the ack on
-            need_ack (bool): Whether we want this ack to be ack'd. Will be blocking if set.
-                             Required for heartbeat messages.
+            processed: Processed sequence numbers
+            rejected: Rejected sequence numbers
+            channel: Channel to send the ack on
+            need_ack: Whether we want this ack to be acknowledged by the target
+                      participant.
+                      Will be blocking if set.
+                      Required for heartbeat messages.
 
         Returns: None
         """
@@ -545,27 +587,36 @@ class SmartglassProtocol:
         )
         await self.send_message(msg, channel=channel, blocking=need_ack)
 
-    async def json(self, data, channel):
+    async def json(
+        self,
+        data: str,
+        channel: ServiceChannel
+    ) -> None:
         """
         Send json message
 
         Args:
-            data (dict): JSON dict
-            channel (:class:`ServiceChannel`): Channel to send the message to
+            data: JSON dict
+            channel: Channel to send the message to
 
         Returns: None
         """
         msg = factory.json(data)
         await self.send_message(msg, channel=channel)
 
-    async def power_on(self, liveid, addr=None, tries=2):
+    async def power_on(
+        self,
+        liveid: str,
+        addr: Optional[str] = None,
+        tries: int = 2
+    ) -> None:
         """
         Power on console.
 
         Args:
-            liveid (str): Live ID of console
-            addr (str): (optional) IP address of console
-            tries (int): PowerOn attempts
+            liveid: Live ID of console
+            addr: IP address of console
+            tries: PowerOn attempts
 
         Returns: None
         """
@@ -579,61 +630,74 @@ class SmartglassProtocol:
 
             await asyncio.sleep(0.1)
 
-    async def power_off(self, liveid):
+    async def power_off(
+        self,
+        liveid: str
+    ) -> None:
         """
         Power off console
 
         Args:
-            liveid (str): Live ID of console
+            liveid: Live ID of console
 
         Returns: None
         """
         msg = factory.power_off(liveid)
         await self.send_message(msg)
 
-    async def disconnect(self, reason=DisconnectReason.Unspecified, error=0):
+    async def disconnect(
+        self,
+        reason: DisconnectReason = DisconnectReason.Unspecified,
+        error: int = 0
+    ) -> None:
         """
         Disconnect console session
 
         Args:
-            reason (:class:`DisconnectReason`): Disconnect reason
-            error (int): Error Code
+            reason: Disconnect reason
+            error: Error Code
 
         Returns: None
         """
         msg = factory.disconnect(reason, error)
         await self.send_message(msg)
 
-    async def game_dvr_record(self, start_delta, end_delta):
+    async def game_dvr_record(
+        self,
+        start_delta: int,
+        end_delta: int
+    ) -> AckStatus:
         """
         Start Game DVR recording
 
         Args:
-            start_delta (int): Start time
-            end_delta (int): End time
+            start_delta: Start time
+            end_delta: End time
 
-        Returns:
-            int: Member of :class:`AckStatus`
+        Returns: Acknowledgement status
         """
         msg = factory.game_dvr_record(start_delta, end_delta)
-        await self.send_message(msg)
+        return await self.send_message(msg)
 
-    async def launch_title(self, uri, location=ActiveTitleLocation.Full):
+    async def launch_title(
+        self,
+        uri: str,
+        location: ActiveTitleLocation = ActiveTitleLocation.Full
+    ) -> AckStatus:
         """
         Launch title via URI
 
         Args:
-            uri (str): Uri string
-            location (:class:`ActiveTitleLocation`): Location
+            uri: Uri string
+            location: Location
 
-        Returns:
-            int: Member of :class:`AckStatus`
+        Returns: Ack status
         """
         msg = factory.title_launch(location, uri)
-        await self.send_message(msg)
+        return await self.send_message(msg)
 
 
-class SequenceManager(object):
+class SequenceManager:
     def __init__(self):
         """
         Process received messages by sequence numbers.
@@ -648,45 +712,45 @@ class SequenceManager(object):
         self._low_watermark = 0
         self._sequence_num = 0
 
-    def add_received(self, num):
+    def add_received(self, sequence_num: int) -> None:
         """
         Add received sequence number
 
         Args:
-            num (int): Sequence number
+            sequence_num: Sequence number
 
         Returns: None
         """
-        if num not in self.received:
-            self.received.append(num)
+        if sequence_num not in self.received:
+            self.received.append(sequence_num)
 
-    def add_processed(self, num):
+    def add_processed(self, sequence_num: int) -> None:
         """
         Add sequence number of message that was sent to console
         and succeeded in processing.
 
         Args:
-            num (int): Sequence number
+            sequence_num: Sequence number
 
         Returns: None
         """
-        if num not in self.processed:
-            self.processed.append(num)
+        if sequence_num not in self.processed:
+            self.processed.append(sequence_num)
 
-    def add_rejected(self, num):
+    def add_rejected(self, sequence_num: int) -> None:
         """
         Add sequence number of message that was sent to console
         and was rejected by it.
 
         Args:
-            num (int): Sequence number
+            sequence_num: Sequence number
 
         Returns: None
         """
-        if num not in self.rejected:
-            self.rejected.append(num)
+        if sequence_num not in self.rejected:
+            self.rejected.append(sequence_num)
 
-    def next_sequence_num(self):
+    def next_sequence_num(self) -> int:
         """
         Get next sequence number to use for outbound `Message`.
 
@@ -696,22 +760,21 @@ class SequenceManager(object):
         return self._sequence_num
 
     @property
-    def low_watermark(self):
+    def low_watermark(self) -> int:
         """
         Get current `Low Watermark`
 
-        Returns:
-            int: Low Watermark
+        Returns: Low Watermark
         """
         return self._low_watermark
 
     @low_watermark.setter
-    def low_watermark(self, value):
+    def low_watermark(self, value: int) -> None:
         """
         Set `Low Watermark`
 
         Args:
-            value (int): Last received sequence number from console
+            value: Last received sequence number from console
 
         Returns: None
         """
@@ -726,7 +789,7 @@ class ChannelError(Exception):
     pass
 
 
-class ChannelManager(object):
+class ChannelManager:
     CHANNEL_CORE = 0
     CHANNEL_ACK = 0x1000000000000000
 
@@ -738,18 +801,17 @@ class ChannelManager(object):
         self._requests = {}
         self._request_id = 0
 
-    def handle_channel_start_response(self, msg):
+    def handle_channel_start_response(self, msg: XStruct) -> ServiceChannel:
         """
         Handle message of type `StartChannelResponse`
 
         Args:
-            msg (:class:`XStructObj`): Start Channel Response message
+            msg: Start Channel Response message
 
         Raises:
             :class:`ChannelError`: If channel acquire failed
 
-        Returns:
-            :class:`ServiceChannel`: Acquired ServiceChannel
+        Returns: Acquired ServiceChannel
         """
         # Find ServiceChannel by RequestId
         request_id = msg.protected_payload.channel_request_id
@@ -769,17 +831,16 @@ class ChannelManager(object):
         LOGGER.debug("Acquired ServiceChannel %s -> Channel: 0x%x", channel.name, channel_id)
         return channel
 
-    def get_next_request_id(self, channel):
+    def get_next_request_id(self, channel: ServiceChannel) -> int:
         """
         Get next Channel request id for ServiceChannel
 
         Incremented on each call.
 
         Args:
-            channel (:class:`ServiceChannel`): Service channel
+            channel: Service channel
 
-        Returns:
-            int: Channel request id
+        Returns: Channel request id
         """
         # Clear old request for same ServiceChannel
         self._requests = {key: val for key, val in self._requests.items()
@@ -789,15 +850,14 @@ class ChannelManager(object):
         self._requests[self._request_id] = channel
         return self._request_id
 
-    def get_channel(self, channel_id):
+    def get_channel(self, channel_id: int) -> ServiceChannel:
         """
-        Get matching :class:`ServiceChannel` for provided Channel ID of `Message`
+        Get matching ServiceChannel enum for provided Channel ID of `Message`
 
         Args:
-            channel_id (int): Channel of Message
+            channel_id: Channel of Message
 
-        Returns:
-            :class:`ServiceChannel`: Service channel
+        Returns: Service channel
         """
         # Core and Ack are fixed, don't need mapping
         if channel_id == self.CHANNEL_CORE:
@@ -811,15 +871,14 @@ class ChannelManager(object):
         raise ChannelError("ServiceChannel not found for channel_id: 0x%x"
                            % channel_id)
 
-    def get_channel_id(self, channel):
+    def get_channel_id(self, channel: ServiceChannel) -> int:
         """
-        Get Channel ID for use in `Message` for provided :class:`ServiceChannel`
+        Get Channel ID for use in `Message` for provided ServiceChannel
 
         Args:
-            channel (:class:`ServiceChannel`): Service channel
+            channel: Service channel
 
-        Returns:
-            int: Channel ID for use in `Message`
+        Returns: Channel ID for use in `Message`
         """
 
         # Core and Ack are fixed, don't need mapping
@@ -829,10 +888,12 @@ class ChannelManager(object):
             return self.CHANNEL_ACK
 
         if channel not in self._channel_mapping:
-            raise ChannelError("Channel ID not found for ServiceChannel: %s" % channel)
+            raise ChannelError(
+                f"Channel ID not found for ServiceChannel: {channel}"
+            )
         return self._channel_mapping[channel]
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Erase the channels table
 
@@ -851,7 +912,7 @@ class FragmentError(Exception):
     pass
 
 
-class FragmentManager(object):
+class FragmentManager:
     """
     Assembles fragmented messages
     """
@@ -859,16 +920,15 @@ class FragmentManager(object):
         self.msg_queue = {}
         self.json_queue = {}
 
-    def reassemble_message(self, msg):
+    def reassemble_message(self, msg: XStruct) -> Optional[XStruct]:
         """
         Reassemble message fragment
 
         Args:
-            msg (:class:`.XStruct`): Message fragment
+            msg: Message fragment
 
-        Returns:
-            :class:`.XStruct`: Reassembled / decoded payload on success,
-                `None` if payload is not ready or assembly failed
+        Returns: Reassembled / decoded payload on success,
+                `None` if payload is not ready or assembly failed.
         """
         msg_type = msg.header.flags.msg_type
         payload = msg.protected_payload
@@ -893,23 +953,23 @@ class FragmentManager(object):
         struct = message_structs.get(msg_type)
         if not struct:
             raise FragmentError(
-                'Failed to find message struct for fragmented {0}'.format(msg_type)
+                f'Failed to find message struct for fragmented {msg_type}'
             )
 
         return struct.parse(assembled)
 
-    def reassemble_json(self, json_msg):
+    def reassemble_json(self, json_msg: dict) -> Optional[dict]:
         """
         Reassemble fragmented json message
 
         Args:
-            json_msg (dict): Fragmented json message
+            json_msg: Fragmented json message
 
-        Returns:
-            str: Reassembled / Decoded string on success,
+        Returns: Reassembled / Decoded json object on success,
                  `None` if datagram is not ready or assembly failed
         """
-        datagram_id, datagram_size = int(json_msg['datagram_id']), int(json_msg['datagram_size'])
+        datagram_id, datagram_size =\
+            int(json_msg['datagram_id']), int(json_msg['datagram_size'])
         fragment_offset = int(json_msg['fragment_offset'])
 
         fragments = self.json_queue.get(datagram_id)
@@ -943,46 +1003,52 @@ class FragmentManager(object):
         return None
 
     @staticmethod
-    def _encode(obj):
+    def _encode(obj: dict) -> str:
         """
         Dump a dict as json string, then encode with base64
 
         Args:
-            obj (dict): Dict to encode
+            obj: Dict to encode
 
-        Returns:
-            str: base64 encoded string
+        Returns: base64 encoded string
         """
-        bytestr = json.dumps(obj, separators=(',', ':'), sort_keys=True).encode('utf-8')
+        bytestr = json.dumps(obj, separators=(',', ':'), sort_keys=True)\
+            .encode('utf-8')
         return base64.b64encode(bytestr).decode('utf-8')
 
     @staticmethod
-    def _decode(data):
+    def _decode(data: str) -> dict:
         """
         Decode a base64 encoded json object
 
         Args:
-            data (str): Base64 string
+            data: Base64 string
 
-        Returns:
-            dict: Decoded json object
+        Returns: Decoded json object
         """
         return json.loads(base64.b64decode(data).decode('utf-8'))
 
 
-def _fragment_connect_request(crypto, client_uuid, pubkey_type, pubkey,
-                              userhash, auth_token, request_num=0):
+def _fragment_connect_request(
+    crypto_instance: crypto.Crypto,
+    client_uuid: uuid.UUID,
+    pubkey_type: PublicKeyType,
+    pubkey: bytes,
+    userhash: str,
+    auth_token: str,
+    request_num: int = 0
+) -> List:
     """
     Internal method to fragment ConnectRequest.
 
     Args:
-        crypto (Crypto): Instance of :class:`Crypto`
-        client_uuid (UUID): Client UUID
-        pubkey_type (:obj:`.PublicKeyType`): Public Key Type
-        pubkey (bytes): Public Key
-        userhash (str): Xbox Live Account userhash
-        auth_token (str): Xbox Live Account authentication token (XSTS)
-        request_num (int): Request Number
+        crypto_instance: Instance of :class:`Crypto`
+        client_uuid: Client UUID
+        pubkey_type Public Key Type
+        pubkey: Public Key
+        userhash: Xbox Live Account userhash
+        auth_token: Xbox Live Account authentication token (XSTS)
+        request_num: Request Number
 
     Returns:
         list: List of ConnectRequest fragments
@@ -1023,7 +1089,7 @@ def _fragment_connect_request(crypto, client_uuid, pubkey_type, pubkey,
         current_auth = auth_token[auth_position: auth_position + available]
         auth_position += len(current_auth)
 
-        iv = crypto.generate_iv()
+        iv = crypto_instance.generate_iv()
         messages.append(
             factory.connect(
                 client_uuid, pubkey_type, pubkey, iv,

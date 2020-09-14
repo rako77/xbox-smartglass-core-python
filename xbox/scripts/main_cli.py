@@ -289,9 +289,9 @@ async def cli_discover_consoles(args):
     """
     Discover consoles
     """
-    LOGGER.info('Sending discovery packets to IP: {0}'
-                .format('IP: ' + args.address if args.address else '<MULTICAST>'))
-    discovered = await Console.discover(addr=args.address, timeout=1)
+    addr = args.address if args.address else '<MULTICAST>'
+    LOGGER.info(f'Sending discovery packets to IP: {addr}')
+    discovered = await Console.discover(addr=addr, timeout=1)
 
     if not len(discovered):
         LOGGER.error('No consoles discovered')
@@ -384,6 +384,8 @@ async def main_async(eventloop, command=None):
 
         await tui.run_tui(eventloop, args.consoles, args.address,
                           args.liveid, args.tokens, args.refresh)
+        while True:
+            await asyncio.sleep(30)
 
     elif 'tokens' in args:
         """
@@ -558,7 +560,7 @@ def main(command=None):
 
     try:
         LOGGER.debug('Calling eventloop.run_forever')
-        eventloop.run_until_complete(main_coro)
+        asyncio.run(main_coro)
     except KeyboardInterrupt:
         pass
     finally:
