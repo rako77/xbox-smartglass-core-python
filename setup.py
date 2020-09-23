@@ -3,7 +3,6 @@
 
 from setuptools import setup
 
-
 setup(
     name="xbox-smartglass-core-asyncio",
     version="0.8.9",
@@ -44,10 +43,10 @@ setup(
         'xbox-webapi>=1.1.8',
         'construct==2.10.56',
         'cryptography==2.8',
-        'aioconsole',
         'dpkt',
-        'marshmallow-objects',
-        'quart'
+        'quart',
+        'aioconsole',
+        'marshmallow-objects'
     ],
     setup_requires=['pytest-runner'],
     tests_require=[

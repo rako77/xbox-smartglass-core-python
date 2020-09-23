@@ -12,25 +12,6 @@ class ConsoleWrap(object):
     def __init__(self, console):
         self.console = console
 
-        if 'input' not in self.console.managers:
-            self.console.add_manager(InputManager)
-        if 'text' not in self.console.managers:
-            self.console.add_manager(TextManager)
-        if 'media' not in self.console.managers:
-            self.console.add_manager(MediaManager)
-        if 'stump' not in self.console.managers:
-            self.console.add_manager(StumpManager)
-
-        try:
-            from xbox.nano.manager import NanoManager
-            if 'nano' not in self.console.managers:
-                self.console.add_manager(NanoManager)
-        except ImportError:
-            log.warning(
-                'Failed to import NanoManager (depends on xbox-smartglass-nano).'
-                ' /nano endpoint will not work!'
-            )
-
     @staticmethod
     async def discover(*args, **kwargs):
         return await Console.discover(*args, **kwargs)

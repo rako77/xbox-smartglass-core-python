@@ -10,11 +10,8 @@ from xbox.sg import enum, packer, packet
 
 from xbox.sg.console import Console
 from xbox.sg.crypto import Crypto
-from xbox.sg.manager import MediaManager, TextManager, InputManager
 
 from xbox.auxiliary.crypto import AuxiliaryStreamCrypto
-
-from xbox.stump.manager import StumpManager
 
 from xbox.rest.app import app as rest_app
 from xbox.rest.consolewrap import ConsoleWrap
@@ -73,10 +70,6 @@ def console(console_address, console_name, uuid_dummy, console_liveid, console_f
         console_address, console_name, uuid_dummy,
         console_liveid, console_flags, c.foreign_pubkey
     )
-    console.add_manager(StumpManager)
-    console.add_manager(MediaManager)
-    console.add_manager(TextManager)
-    console.add_manager(InputManager)
     return console
 
 
