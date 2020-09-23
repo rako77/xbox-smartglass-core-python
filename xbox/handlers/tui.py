@@ -204,9 +204,6 @@ class ConsoleButton(urwid.Button):
         self.app = app
 
         self.console = console
-        self.console.add_manager(InputManager)
-        self.console.add_manager(MediaManager)
-        self.console.add_manager(TextManager)
         self.console.on_connection_state += lambda _: self.refresh()
         self.console.on_console_status += lambda _: self.refresh()
         self.console.on_device_status += lambda _: self.refresh()
@@ -222,7 +219,7 @@ class ConsoleButton(urwid.Button):
 
         self.app.view_details_menu(self.console)
 
-    def connect(self):
+    async def connect(self):
         if self.console.connected:
             return True
 
@@ -230,7 +227,7 @@ class ConsoleButton(urwid.Button):
             self.app.view_msgbox('Console unavailable, try refreshing')
             return False
 
-        state = self.console.connect(
+        state = await self.console.connect(
             userhash=self.app.auth_mgr.userinfo.userhash,
             xsts_token=self.app.auth_mgr.xsts_token.jwt
         )
@@ -241,13 +238,14 @@ class ConsoleButton(urwid.Button):
 
         return True
 
-    def disconnect(self):
+    async def disconnect(self):
         if self.console.connected:
-            self.console.disconnect()
+            await self.console.disconnect()
 
     def refresh(self):
         text = ' {c.name:<20}{c.address:<20}{c.liveid:<20}{ds:<20}'.format(
-            c=self.console, ds='{}, {}'.format(self.console.device_status.name, self.console.connection_state.name)
+            c=self.console,
+            ds=f'{self.console.device_status.name}, {self.console.connection_state.name}'
         )
         self.textwidget.set_text(text)
 

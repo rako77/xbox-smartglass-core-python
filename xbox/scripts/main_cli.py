@@ -530,7 +530,7 @@ async def main_async(eventloop, command=None):
         Fallout 4 relay
         """
         print('Starting Fallout 4 relay service...')
-        console.add_manager(TitleManager)
+        await console.add_manager(TitleManager)
         console.title.on_connection_info += fallout4_relay.on_connection_info
         await console.start_title_channel(title_id=fallout4_relay.FALLOUT_TITLE_ID)
         print('Fallout 4 relay started')
@@ -539,14 +539,14 @@ async def main_async(eventloop, command=None):
         Gamepad input
         """
         print('Starting gamepad input handler...')
-        console.add_manager(manager.InputManager)
+        await console.add_manager(manager.InputManager)
         await gamepad_input.input_loop(console)
     elif command == Commands.TextInput:
         """
         Text input
         """
         print('Starting text input handler...')
-        console.add_manager(manager.TextManager)
+        await console.add_manager(manager.TextManager)
         console.text.on_systemtext_configuration += text_input.on_text_config
         console.text.on_systemtext_input += functools.partial(text_input.on_text_input, console)
         console.text.on_systemtext_done += text_input.on_text_done

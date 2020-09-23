@@ -21,6 +21,7 @@ from xbox.sg.enum import PacketType, ConnectionResult, DisconnectReason,\
     PairedIdentityState, PublicKeyType
 from xbox.sg.constants import WindowsClientInfo, AndroidClientInfo,\
     MessageTarget
+from xbox.sg.manager import MediaManager, InputManager, TextManager
 from xbox.sg.utils.events import Event
 from xbox.sg.utils.struct import XStruct
 
@@ -74,6 +75,12 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
         self.on_json = Event()
 
         self.started = False
+
+    async def stop(self) -> None:
+        """
+        Dummy
+        """
+        pass
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.started = True
@@ -152,7 +159,7 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
                         extra={'_msg': msg}
                     )
 
-                await self.send(data, addr, PORT)
+                await self._send(data, (addr, PORT))
                 result = await self._await_ack('ack_%i' % seqn, timeout)
                 tries += 1
 
@@ -165,11 +172,21 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
                 f"Sending ConnectRequest to {addr}", extra={'_msg': msg}
             )
 
-        await self.send(data, addr, PORT)
+        await self._send(data, (addr, PORT))
 
-    async def send(self, data: bytes, addr: str, port: int):
+    async def _send(self, data: bytes, addr: Optional[Tuple[str, int]]):
+        """
+        Send data on the connected transport.
+
+        If addr is not provided, the target address that was used at the time
+        of instantiating the protocol is used.
+        (e.g. asyncio.create_datagram_endpoint in Console-class).
+
+        Args:
+            addr: Tuple of (ip_address, port)
+        """
         if self._transport:
-            self._transport.sendto(data, (addr, port) if addr and port else None)
+            self._transport.sendto(data, addr if addr else None)
         else:
             LOGGER.error('Transport not ready...')
 
