@@ -257,6 +257,50 @@ class Console(object):
         await cls._ensure_global_protocol_started()
         await cls.__protocol__.power_on(liveid, addr, tries)
 
+    async def send_message(
+        self,
+        msg: XStruct,
+        channel: ServiceChannel = ServiceChannel.Core,
+        addr: Optional[str] = None,
+        blocking: bool = True,
+        timeout: int = 5,
+        retries: int = 3
+    ) -> Optional[XStruct]:
+        """
+        Send message to console.
+
+        Args:
+            msg: Unassembled message to send
+            channel: Channel to send the message on,
+                           Enum member of `ServiceChannel`
+            addr: IP address of target console
+            blocking: If set and `msg` is `Message`-packet, wait for ack
+            timeout: Seconds to wait for ack, only useful if `blocking`
+                           is `True`
+            retries: Max retry count.
+
+        Returns: None
+        """
+        return await self.protocol.send_message(
+            msg, channel, addr, blocking, timeout, retries
+        )
+
+    async def json(
+        self,
+        data: str,
+        channel: ServiceChannel
+    ) -> None:
+        """
+        Send json message
+
+        Args:
+            data: JSON dict
+            channel: Channel to send the message to
+
+        Returns: None
+        """
+        return await self.protocol.send_message(data, channel=channel)
+
     async def _power_on(self, tries: int = 2) -> None:
         await Console.power_on(self.liveid, self.address, tries)
 
