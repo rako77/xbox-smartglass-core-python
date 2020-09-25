@@ -107,6 +107,9 @@ class Console(object):
         self.on_active_surface = Event()
         self.on_timeout = Event()
 
+        self.on_message = Event()
+        self.on_json = Event()
+
         self.power_on = self._power_on  # Dirty hack
 
         self.protocol: Optional[SmartglassProtocol] = None
@@ -152,8 +155,8 @@ class Console(object):
             )
 
             self.protocol.on_timeout += self._handle_timeout
-
             self.protocol.on_message += self._handle_message
+            self.protocol.on_json += self._handle_json
 
     @classmethod
     async def _ensure_global_protocol_started(cls) -> None:
@@ -385,6 +388,20 @@ class Console(object):
 
         elif msg_type == MessageType.ActiveSurfaceChange:
             self.active_surface = msg.protected_payload
+
+        self.on_message(msg, channel)
+
+    def _handle_json(self, msg: XStruct, channel: ServiceChannel) -> None:
+        """
+        Internal handler for JSON messages
+
+        Args:
+            msg: JSON message instance
+            channel: Service channel originating from
+
+        Returns: None
+        """
+        self.on_json(msg, channel)
 
     def _handle_timeout(self) -> None:
         """
