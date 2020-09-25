@@ -38,11 +38,11 @@ import asyncio
 import socket
 import logging
 from uuid import UUID
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 from xbox.sg.crypto import Crypto
-from xbox.sg.manager import MediaManager, InputManager, TextManager
+from xbox.sg.manager import Manager
 from xbox.sg.enum import PairedIdentityState, DeviceStatus, ConnectionState, \
     MessageType, PrimaryDeviceFlag, ActiveTitleLocation, AckStatus, \
     ServiceChannel, MediaControlCommand, GamePadButton
@@ -52,6 +52,7 @@ from xbox.sg.utils.struct import XStruct
 from xbox.stump.manager import StumpManager
 
 LOGGER = logging.getLogger(__name__)
+
 
 class Console(object):
     __protocol__: SmartglassProtocol = None
@@ -90,12 +91,6 @@ class Console(object):
             # This sets up the crypto context
             self.public_key = public_key
 
-        self.media: Optional[MediaManager] = None
-        self.input: Optional[InputManager] = None
-        self.text: Optional[TextManager] = None
-        self.stump: Optional[StumpManager] = None
-        # Note: NanoManager and TitleManager have to be handled externally
-
         self._device_status = DeviceStatus.Unavailable
         self._connection_state = ConnectionState.Disconnected
         self._pairing_state = PairedIdentityState.NotPaired
@@ -108,6 +103,9 @@ class Console(object):
         self.on_console_status = Event()
         self.on_active_surface = Event()
         self.on_timeout = Event()
+
+        self.managers: Dict[str, Manager] = {}
+        self._functions = {}
 
         self.on_message = Event()
         self.on_json = Event()
@@ -204,6 +202,53 @@ class Console(object):
             uuid=str(self.uuid),
             liveid=self.liveid
         )
+
+    def add_manager(self, manager: Manager, *args, **kwargs):
+        """
+        Add a manager to the console instance.
+
+        This will inherit all public methods of the manager class.
+
+        Args:
+            manager: Manager to add
+            *args: Arguments
+            **kwargs: KwArguments
+
+        Returns:
+            None
+        """
+        if not issubclass(manager, Manager):
+            raise ValueError("Manager needs to subclass {}.{}".format(
+                Manager.__module__, Manager.__name__)
+            )
+
+        namespace = getattr(manager, '__namespace__', manager.__name__.lower())
+        manager_inst = manager(self, *args, **kwargs)
+        self.managers[namespace] = manager_inst
+
+        for item in dir(manager):
+            if item.startswith('_'):
+                continue
+
+            if item in self.__dict__:
+                raise ValueError("Attribute already exists: %s" % item)
+
+            self._functions[item] = getattr(manager_inst, item)
+
+    def __getattr__(self, k: str):
+        """
+        Accessor to manager functions
+
+        Args:
+            k: Parameter name / key
+
+        Returns: Object requested by k
+        """
+        if k in self.managers:
+            return self.managers[k]
+        elif k in self._functions:
+            return self._functions[k]
+        return object.__getattribute__(self, k)
 
     @classmethod
     async def discover(cls, *args, **kwargs) -> List:
