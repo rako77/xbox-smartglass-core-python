@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name="xbox-smartglass-core-asyncio",
-    version="0.8.9",
+    version="0.8.10",
     author="OpenXbox",
     author_email="noreply@openxbox.org",
     description="A library to interact with the Xbox One gaming console via the SmartGlass protocol.",
