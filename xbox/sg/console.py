@@ -151,8 +151,9 @@ class Console(object):
                 allow_broadcast=True
             )
 
-            self.protocol.on_timeout += self._on_timeout
-            self.protocol.on_message += self._on_message
+            self.protocol.on_timeout += self._handle_timeout
+
+            self.protocol.on_message += self._handle_message
 
     @classmethod
     async def _ensure_global_protocol_started(cls) -> None:
@@ -302,8 +303,6 @@ class Console(object):
             raise e
 
         self.connection_state = ConnectionState.Connected
-
-
         return self.connection_state
 
     async def launch_title(
@@ -363,7 +362,7 @@ class Console(object):
         await self._reset_state()
         self.device_status = DeviceStatus.Unavailable
 
-    def _on_message(self, msg: XStruct, channel: ServiceChannel) -> None:
+    def _handle_message(self, msg: XStruct, channel: ServiceChannel) -> None:
         """
         Internal handler for console specific messages aka.
         `PairedIdentityStateChange`, `ConsoleStatus` and
@@ -387,13 +386,13 @@ class Console(object):
         elif msg_type == MessageType.ActiveSurfaceChange:
             self.active_surface = msg.protected_payload
 
-    async def _on_timeout(self) -> None:
+    def _handle_timeout(self) -> None:
         """
         Internal handler for console connection timeout.
 
         Returns: None
         """
-        await self._reset_state()
+        asyncio.create_task(self._reset_state())
         self.device_status = DeviceStatus.Unavailable
         self.on_timeout()
 
