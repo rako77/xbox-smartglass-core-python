@@ -38,7 +38,7 @@ import asyncio
 import socket
 import logging
 from uuid import UUID
-from typing import Optional, List, Union, Dict
+from typing import Optional, List, Union, Dict, Type
 
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 from xbox.sg.crypto import Crypto
@@ -203,7 +203,7 @@ class Console(object):
             liveid=self.liveid
         )
 
-    def add_manager(self, manager: Manager, *args, **kwargs):
+    def add_manager(self, manager: Type[Manager], *args, **kwargs):
         """
         Add a manager to the console instance.
 

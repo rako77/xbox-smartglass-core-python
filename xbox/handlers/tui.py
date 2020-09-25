@@ -15,6 +15,7 @@ from xbox.webapi.scripts.tui import WebAPIDisplay
 from xbox.scripts import ExitCodes
 from xbox.sg.console import Console
 from xbox.sg.enum import DeviceStatus, GamePadButton, MediaPlaybackStatus
+from xbox.sg.manager import InputManager, TextManager, MediaManager
 
 from construct.lib import containers
 containers.setGlobalPrintFullStrings(True)
@@ -45,8 +46,8 @@ class ControllerRemote(urwid.Filler):
     def keypress(self, size, key):
         if key in self.keymap:
             button = self.keymap[key]
-            asyncio.create_task(self.console.input.gamepad_input(button))
-            asyncio.create_task(self.console.input.gamepad_input(GamePadButton.Clear))
+            asyncio.create_task(self.console.gamepad_input(button))
+            asyncio.create_task(self.console.gamepad_input(GamePadButton.Clear))
         elif key in ('q', 'Q'):
             return key
         else:
@@ -74,10 +75,10 @@ class TextInput(urwid.Filler):
     def keypress(self, size, key):
         if key != 'enter':
             ret = super(TextInput, self).keypress(size, key)
-            asyncio.create_task(self.console.text.send_systemtext_input(self.original_widget.edit_text))
+            asyncio.create_task(self.console.send_systemtext_input(self.original_widget.edit_text))
             return ret
         else:
-            asyncio.create_task(self.console.text.finish_text_input())
+            asyncio.create_task(self.console.finish_text_input())
             self.app.return_to_details_menu()
 
 
@@ -204,6 +205,9 @@ class ConsoleButton(urwid.Button):
         self.app = app
 
         self.console = console
+        self.console.add_manager(InputManager)
+        self.console.add_manager(MediaManager)
+        self.console.add_manager(TextManager)
         self.console.on_connection_state += lambda _: self.refresh()
         self.console.on_console_status += lambda _: self.refresh()
         self.console.on_device_status += lambda _: self.refresh()
@@ -604,6 +608,7 @@ class SGDisplay(object):
 
         self.loop.start()
         self.running = True
+        await self.consoles.refresh()
 
         while self.running:
             await asyncio.sleep(1000)

@@ -8,7 +8,10 @@ def test_consolewrap_init(console):
     wrap = ConsoleWrap(console)
 
     assert wrap.console == console
-
+    assert 'text' in wrap.console.managers
+    assert 'input' in wrap.console.managers
+    assert 'stump' in wrap.console.managers
+    assert 'media' in wrap.console.managers
 
 @pytest.mark.asyncio
 async def test_discover():

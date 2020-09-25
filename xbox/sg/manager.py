@@ -4,14 +4,23 @@ Managers for handling different ServiceChannels.
 If a manager for a specific :class:`ServiceChannel` is attached,
 incoming messages get forwarded there, otherways they are discarded.
 
-
+Managers can be attached by calling `add_manager()` on the :class:`Console`
+object (see example)
+Methods of manager are available through console-context.
 
 Example:
-    How to initialize an external manager (TitleManager or NanoManager) :
+    How to add a manager::
 
         discovered = await Console.discover(timeout=1)
         if len(discovered):
             console = discovered[0]
+
+            # Add manager, optionally passing initialization parameter
+            some_arg_for_manager_init = 'example'
+            console.add_manager(
+                MediaManager,
+                additional_arg=some_arg_for_manager_init
+            )
 
             await console.connect()
             if console.connection_state != ConnectionState.Connected:
@@ -19,11 +28,8 @@ Example:
                 sys.exit(1)
             console.wait(1)
 
-            # Add manager
-            title_mgr = TitleManager(console)
-
             # Call manager method
-            await title_mgr.start_title_channel(title_id=0x54321)
+            console.media_command(0x54321, MediaControlCommand.PlayPauseToggle, 0)
 
         else:
             print("No consoles discovered")
@@ -50,8 +56,11 @@ class Manager(object):
 
     def __init__(self, console, channel: ServiceChannel):
         """
+        Don't use directly!
+        INTERNALLY called by the parent :class:`Console`!
+
         Args:
-            console: Console object
+            console: Console object, internally passed by `Console.add_manager
             channel: Service channel
         """
         self.console = console
@@ -113,7 +122,7 @@ class InputManager(Manager):
         Input Manager (ServiceChannel.SystemInput)
 
         Args:
-             console: Console object
+             console: Console object, internally passed by `Console.add_manager
 
         """
         super(InputManager, self).__init__(console, ServiceChannel.SystemInput)
@@ -174,7 +183,7 @@ class MediaManager(Manager):
         """
         Media Manager (ServiceChannel.SystemMedia)
 
-        Args: Console instance
+        Args: Console object, internally passed by `Console.add_manager
 
         """
         super(MediaManager, self).__init__(console, ServiceChannel.SystemMedia)
@@ -412,8 +421,7 @@ class TextManager(Manager):
         Text Manager (ServiceChannel.SystemText)
 
         Args:
-             console (:class:`.Console`): Console object, internally passed
-                                          by `Console.add_manager`
+             console: Console object, internally passed by `Console.add_manager
 
         """
         super(TextManager, self).__init__(console, ServiceChannel.SystemText)
