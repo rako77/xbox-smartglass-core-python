@@ -145,12 +145,11 @@ class Console(object):
         if not self.protocol:
             loop = asyncio.get_running_loop()
             _, self.protocol = await loop.create_datagram_endpoint(
-                SmartglassProtocol,
+                lambda: SmartglassProtocol(self.address, self._crypto),
                 family=socket.AF_INET,
                 remote_addr=(self.address, 5050),
                 allow_broadcast=True
             )
-            self.protocol.crypto = self._crypto
 
     @classmethod
     async def _ensure_global_protocol_started(cls) -> None:
@@ -160,7 +159,7 @@ class Console(object):
         if not cls.__protocol__:
             loop = asyncio.get_running_loop()
             _, cls.__protocol__ = await loop.create_datagram_endpoint(
-                SmartglassProtocol,
+                lambda: SmartglassProtocol(),
                 family=socket.AF_INET,
                 allow_broadcast=True
             )

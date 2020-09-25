@@ -51,13 +51,20 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
     HEARTBEAT_INTERVAL = 3.0
 
     def __init__(
-        self
+        self,
+        address: Optional[str] = None,
+        crypto_instance: Optional[crypto.Crypto] = None
     ):
         """
         Instantiate Smartglass Protocol handler.
+
+        Args:
+            address: Address
+            crypto_instance: Crypto instance
         """
+        self.address = address
         self._transport: Optional[asyncio.DatagramTransport] = None
-        self.crypto: Optional[crypto.Crypto] = None
+        self.crypto = crypto_instance
 
         self._discovered = {}
 
@@ -136,7 +143,12 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
         else:
             data = packer.pack(msg)
 
-        if not data:
+        if self.address:
+            addr = self.address
+
+        if not addr:
+            raise ProtocolError("No address specified in send_message")
+        elif not data:
             raise ProtocolError("No data")
 
         if msg.header.pkt_type == PacketType.Message \
@@ -174,7 +186,7 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
 
         await self._send(data, (addr, PORT))
 
-    async def _send(self, data: bytes, addr: Optional[Tuple[str, int]]):
+    async def _send(self, data: bytes, target: Tuple[str, int]):
         """
         Send data on the connected transport.
 
@@ -183,10 +195,11 @@ class SmartglassProtocol(asyncio.DatagramProtocol):
         (e.g. asyncio.create_datagram_endpoint in Console-class).
 
         Args:
-            addr: Tuple of (ip_address, port)
+            data: Data to send
+            target: Tuple of (ip_address, port)
         """
         if self._transport:
-            self._transport.sendto(data, addr if addr else None)
+            self._transport.sendto(data, target)
         else:
             LOGGER.error('Transport not ready...')
 
