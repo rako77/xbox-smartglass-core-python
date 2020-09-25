@@ -1,11 +1,13 @@
 """
 Wrapper around asyncio's tasks
 """
+import asyncio
 
 
 class Event(object):
-    def __init__(self):
+    def __init__(self, asynchronous: bool = False):
         self.handlers = []
+        self.asynchronous = asynchronous
 
     def add(self, handler):
         if not callable(handler):
@@ -26,4 +28,7 @@ class Event(object):
 
     def __call__(self, *args, **kwargs):
         for handler in self.handlers:
-            handler(*args, **kwargs)
+            if self.asynchronous:
+                asyncio.create_task(handler(*args, **kwargs))
+            else:
+                handler(*args, **kwargs)
