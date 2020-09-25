@@ -151,6 +151,9 @@ class Console(object):
                 allow_broadcast=True
             )
 
+            self.protocol.on_timeout += self._on_timeout
+            self.protocol.on_message += self._on_message
+
     @classmethod
     async def _ensure_global_protocol_started(cls) -> None:
         """
