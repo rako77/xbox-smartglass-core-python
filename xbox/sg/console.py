@@ -386,12 +386,6 @@ class Console(object):
 
         await self._ensure_protocol_started()
 
-        # Assign managers as protocol is running at this point
-        self.media = MediaManager(self)
-        self.input = InputManager(self)
-        self.text = TextManager(self)
-        self.stump = StumpManager(self)
-
         self.pairing_state = PairedIdentityState.NotPaired
         self.connection_state = ConnectionState.Connecting
 
