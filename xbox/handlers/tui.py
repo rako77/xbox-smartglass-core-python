@@ -214,10 +214,11 @@ class ConsoleButton(urwid.Button):
         self.refresh()
 
     def callback(self, *args):
-        if not self.connect():
-            return
+        asyncio.create_task(self.cb_connect())
 
-        self.app.view_details_menu(self.console)
+    async def cb_connect(self):
+        if await self.connect():
+            self.app.view_details_menu(self.console)
 
     async def connect(self):
         if self.console.connected:
