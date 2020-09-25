@@ -88,10 +88,10 @@ class Console(object):
             # This sets up the crypto context
             self.public_key = public_key
 
-        self.media_mgr: Optional[MediaManager] = None
-        self.input_mgr: Optional[InputManager] = None
-        self.text_mgr: Optional[TextManager] = None
-        self.stump_mgr: Optional[StumpManager] = None
+        self.media: Optional[MediaManager] = None
+        self.input: Optional[InputManager] = None
+        self.text: Optional[TextManager] = None
+        self.stump: Optional[StumpManager] = None
         # Note: NanoManager and TitleManager have to be handled externally
 
         self._device_status = DeviceStatus.Unavailable
@@ -281,6 +281,12 @@ class Console(object):
 
         await self._ensure_protocol_started()
 
+        # Assign managers as protocol is running at this point
+        self.media = MediaManager(self)
+        self.input = InputManager(self)
+        self.text = TextManager(self)
+        self.stump = StumpManager(self)
+
         self.pairing_state = PairedIdentityState.NotPaired
         self.connection_state = ConnectionState.Connecting
 
@@ -294,6 +300,7 @@ class Console(object):
             raise e
 
         self.connection_state = ConnectionState.Connected
+
 
         return self.connection_state
 
