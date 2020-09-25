@@ -36,6 +36,7 @@ Example:
 
 import asyncio
 import socket
+import logging
 from uuid import UUID
 from typing import Optional, List, Union
 
@@ -50,6 +51,7 @@ from xbox.sg.utils.events import Event
 from xbox.sg.utils.struct import XStruct
 from xbox.stump.manager import StumpManager
 
+LOGGER = logging.getLogger(__name__)
 
 class Console(object):
     __protocol__: SmartglassProtocol = None
@@ -281,6 +283,10 @@ class Console(object):
 
         Returns: None
         """
+        if not self.protocol:
+            LOGGER.error('send_message: Protocol not ready')
+            return
+
         return await self.protocol.send_message(
             msg, channel, addr, blocking, timeout, retries
         )
@@ -299,6 +305,10 @@ class Console(object):
 
         Returns: None
         """
+        if not self.protocol:
+            LOGGER.error('json: Protocol not ready')
+            return
+
         return await self.protocol.send_message(data, channel=channel)
 
     async def _power_on(self, tries: int = 2) -> None:

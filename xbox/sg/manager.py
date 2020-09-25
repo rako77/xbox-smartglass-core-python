@@ -55,8 +55,8 @@ class Manager(object):
             channel: Service channel
         """
         self.console = console
-        self.console.protocol.on_message += self._pre_on_message
-        self.console.protocol.on_json += self._pre_on_json
+        self.console.on_message += self._pre_on_message
+        self.console.on_json += self._pre_on_json
         self._channel = channel
 
     def _pre_on_message(self, msg, channel):
@@ -86,7 +86,7 @@ class Manager(object):
         Args:
             msg (:class:`XStructObj`): Message
         """
-        return await self.console.protocol.send_message(msg, channel=self._channel)
+        return await self.console.send_message(msg, channel=self._channel)
 
     async def _send_json(self, data: str) -> None:
         """
@@ -95,7 +95,7 @@ class Manager(object):
         Args:
             data: JSON message
         """
-        return await self.console.protocol.json(data, channel=self._channel)
+        return await self.console.json(data, channel=self._channel)
 
 
 class InputManagerError(Exception):
