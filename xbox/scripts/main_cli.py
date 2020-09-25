@@ -311,18 +311,19 @@ async def cli_discover_consoles(args):
     return discovered
 
 
-async def main_async(eventloop, command=None):
+async def main_async(command=None):
     """
     Async Main entrypoint
 
     Args:
-        eventloop (asyncio.AbstractEventLoop):
         command (Commands):
 
     Returns:
          None
     """
     auth_manager = None
+
+    eventloop = asyncio.get_running_loop()
 
     if command:
         # Take passed command and append actual cmdline
@@ -552,20 +553,11 @@ async def main_async(eventloop, command=None):
 
 
 def main(command=None):
-    eventloop = asyncio.get_event_loop()
-
     LOGGER.debug('Entering main_async')
-    main_coro = main_async(eventloop, command)
-
     try:
-        LOGGER.debug('Calling eventloop.run_forever')
-        asyncio.run(main_coro)
+        asyncio.run(main_async(command))
     except KeyboardInterrupt:
         pass
-    finally:
-        # cleanup
-        main_coro.close()
-        eventloop.close()
 
 
 def main_discover():
