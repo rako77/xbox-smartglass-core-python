@@ -92,7 +92,6 @@ def test_text_send():
     pass
 
 
-@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_media_status(rest_client_connected_media_console_status, console_liveid):
     client = rest_client_connected_media_console_status
@@ -126,7 +125,6 @@ async def test_media_status(rest_client_connected_media_console_status, console_
     assert metadata['subtitle'] == ''
 
 
-@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_console_status(rest_client_connected_media_console_status, console_liveid):
     client = rest_client_connected_media_console_status
