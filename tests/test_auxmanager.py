@@ -4,6 +4,7 @@ from xbox.sg.enum import ServiceChannel
 from xbox.auxiliary.manager import TitleManager, TitleManagerError
 
 
+@pytest.mark.skip()
 def test_manager_messagehandling(console, decrypted_packets):
     manager = TitleManager(console)
 

@@ -23,6 +23,7 @@ async def test_auth_overview(rest_client):
     assert json['success'] is True
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_login_get(rest_client):
     resp = await rest_client.test_client().get('/auth/login')
@@ -44,6 +45,7 @@ async def test_auth_login_post_no_params(rest_client):
     assert resp_json['message'] == 'No email or password parameter provided'
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_login_post_invalid_credentials(rest_client):
     resp = await rest_client.test_client().post('/auth/login',
@@ -56,6 +58,7 @@ async def test_auth_login_post_invalid_credentials(rest_client):
     assert resp_json['two_factor_required'] is False
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_login_post_webview_invalid_credentials(rest_client):
     resp = await rest_client.test_client().post(
@@ -72,6 +75,7 @@ async def test_auth_login_post_webview_invalid_credentials(rest_client):
     assert b'Login failed' in resp.data
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_logout_get_not_logged_in(rest_client):
     resp = await rest_client.test_client().get('/auth/logout')
@@ -82,6 +86,7 @@ async def test_auth_logout_get_not_logged_in(rest_client):
     assert b'currently not logged in' in resp.data
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_logout_post(rest_client):
     resp = await rest_client.test_client().post('/auth/logout')
@@ -92,6 +97,7 @@ async def test_auth_logout_post(rest_client):
     assert resp_json['message'] == 'Logout succeeded'
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_logout_post_webview(rest_client):
     resp = await rest_client.test_client().post('/auth/logout', data={'webview': True})
@@ -113,6 +119,7 @@ async def test_auth_url(rest_client):
     assert resp_json['authorization_url'].startswith('https://login.live.com/oauth20_authorize.srf')
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_oauth_get(rest_client):
     resp = await rest_client.test_client().get('/auth/oauth')
@@ -143,6 +150,7 @@ async def test_auth_oauth_post_no_params_webview(rest_client):
     assert resp_json['message'] == 'Please provide redirect_url'
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_oauth_post_invalid_params(rest_client):
     resp = await rest_client.test_client().post('/auth/oauth', data={'redirect_uri': 'hxxxp:/invalid'})
@@ -153,6 +161,7 @@ async def test_auth_oauth_post_invalid_params(rest_client):
     assert resp_json['message'].startswith('Login failed')
 
 
+@pytest.mark.skip()
 @pytest.mark.asyncio
 async def test_auth_oauth_post_invalid_params_webview(rest_client):
     resp = await rest_client.test_client().post(
