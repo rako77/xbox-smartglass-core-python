@@ -7,6 +7,7 @@ Additional shows console status (active titles, OS version, locale) and media st
 import json
 import urwid
 import logging
+import asyncio
 from binascii import hexlify
 
 from xbox.webapi.scripts.tui import WebAPIDisplay
@@ -14,7 +15,6 @@ from xbox.webapi.scripts.tui import WebAPIDisplay
 from xbox.scripts import ExitCodes
 from xbox.sg.console import Console
 from xbox.sg.enum import DeviceStatus, GamePadButton, MediaPlaybackStatus
-from xbox.sg.manager import InputManager, TextManager, MediaManager
 
 from construct.lib import containers
 containers.setGlobalPrintFullStrings(True)
@@ -45,8 +45,8 @@ class ControllerRemote(urwid.Filler):
     def keypress(self, size, key):
         if key in self.keymap:
             button = self.keymap[key]
-            self.console.gamepad_input(button)
-            self.console.gamepad_input(GamePadButton.Clear)
+            asyncio.create_task(self.console.input.gamepad_input(button))
+            asyncio.create_task(self.console.input.gamepad_input(GamePadButton.Clear))
         elif key in ('q', 'Q'):
             return key
         else:
@@ -74,10 +74,10 @@ class TextInput(urwid.Filler):
     def keypress(self, size, key):
         if key != 'enter':
             ret = super(TextInput, self).keypress(size, key)
-            self.console.send_systemtext_input(self.original_widget.edit_text)
+            asyncio.create_task(self.console.text.send_systemtext_input(self.original_widget.edit_text))
             return ret
         else:
-            self.console.finish_text_input()
+            asyncio.create_task(self.console.text.finish_text_input())
             self.app.return_to_details_menu()
 
 
@@ -256,11 +256,11 @@ class ConsoleButton(urwid.Button):
 
     def keypress(self, size, key):
         if key in ('p', 'P'):
-            self.console.power_on()
+            asyncio.create_task(self.console.power_on())
         elif key in ('c', 'C'):
-            self.connect()
+            asyncio.create_task(self.connect())
         elif key in ('d', 'D'):
-            self.disconnect()
+            asyncio.create_task(self.disconnect())
         else:
             return super(ConsoleButton, self).keypress(size, key)
 
@@ -308,7 +308,7 @@ class ConsoleList(urwid.Frame):
 
     def keypress(self, size, key):
         if key in ('r', 'R'):
-            self.refresh()
+            asyncio.create_task(self.refresh())
         else:
             return super(ConsoleList, self).keypress(size, key)
 
@@ -329,18 +329,18 @@ class CommandList(urwid.SimpleFocusListWalker):
         self.app.view_launch_title_textbox(self.__launch_title)
 
     def __launch_title(self, uri):
-        self.console.launch_title(uri)
+        asyncio.create_task(self.console.launch_title(uri))
         self.app.return_to_details_menu()
 
     def _controller_remote(self):
         self.app.view_controller_remote_overlay(self.console)
 
     def _disconnect(self):
-        self.console.disconnect()
+        asyncio.create_task(self.console.disconnect())
         self.app.return_to_main_menu()
 
     def _power_off(self):
-        self.console.power_off()
+        asyncio.create_task(self.console.power_off())
         self.app.return_to_main_menu()
 
 
@@ -478,6 +478,7 @@ class SGDisplay(object):
         self.header = urwid.AttrMap(urwid.Text(self.header_text), 'header')
         footer = urwid.AttrMap(urwid.Text(self.footer_main_text), 'foot')
 
+        self.running = False
         self.loop = None
         self.consoles = ConsoleList(self, consoles, self.header, footer)
         self.auth_mgr = auth_mgr
@@ -586,20 +587,25 @@ class SGDisplay(object):
             self.pop_view(self)
 
     def do_quit(self):
-        raise urwid.ExitMainLoop()
+        self.running = False
+        self.loop.stop()
 
     async def run(self, loop):
         eventloop = urwid.AsyncioEventLoop(loop=loop)
         self.loop = urwid.MainLoop(
-            urwid.SolidFill('x'),
+            urwid.SolidFill('xq'),
             handle_mouse=False,
             palette=self.palette,
             unhandled_input=self.unhandled_input,
             event_loop=eventloop
         )
-
         self.loop.set_alarm_in(0.0001, lambda *args: self.view_main_menu())
-        await self.consoles.refresh()
+
+        self.loop.start()
+        self.running = True
+
+        while self.running:
+            await asyncio.sleep(1000)
 
     def unhandled_input(self, input):
         if input in ('q', 'Q', 'esc'):

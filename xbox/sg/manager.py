@@ -4,33 +4,27 @@ Managers for handling different ServiceChannels.
 If a manager for a specific :class:`ServiceChannel` is attached,
 incoming messages get forwarded there, otherways they are discarded.
 
-Managers can be attached by calling `add_manager()` on the :class:`Console` object (see example)
-Methods of manager are available through console-context
+
 
 Example:
-    How to add a manager::
+    How to initialize an external manager (TitleManager or NanoManager) :
 
-        discovered = Console.discover(timeout=1)
+        discovered = await Console.discover(timeout=1)
         if len(discovered):
             console = discovered[0]
 
-            # Add manager, optionally passing initialization parameter
-            some_arg_for_manager_init = 'example'
-            console.add_manager(MediaManager, additional_arg=some_arg_for_manager_init)
-
-            console.connect()
+            await console.connect()
             if console.connection_state != ConnectionState.Connected:
                 print("Connection failed")
                 sys.exit(1)
             console.wait(1)
 
-            # Call manager method
-            console.media_command(0x54321, MediaControlCommand.PlayPauseToggle, 0)
+            # Add manager
+            title_mgr = TitleManager(console)
 
-            try:
-                console.protocol.serve_forever()
-            except KeyboardInterrupt:
-                pass
+            # Call manager method
+            await title_mgr.start_title_channel(title_id=0x54321)
+
         else:
             print("No consoles discovered")
             sys.exit(1)

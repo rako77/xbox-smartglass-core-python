@@ -384,8 +384,7 @@ async def main_async(command=None):
 
         await tui.run_tui(eventloop, args.consoles, args.address,
                           args.liveid, args.tokens, args.refresh)
-        while True:
-            await asyncio.sleep(30)
+        return
 
     elif 'tokens' in args:
         """
@@ -530,23 +529,23 @@ async def main_async(command=None):
         Fallout 4 relay
         """
         print('Starting Fallout 4 relay service...')
-        await console.add_manager(TitleManager)
-        console.title.on_connection_info += fallout4_relay.on_connection_info
-        await console.start_title_channel(title_id=fallout4_relay.FALLOUT_TITLE_ID)
+        title_mgr = TitleManager(console)
+        title_mgr.on_connection_info += fallout4_relay.on_connection_info
+        await title_mgr.start_title_channel(
+            title_id=fallout4_relay.FALLOUT_TITLE_ID
+        )
         print('Fallout 4 relay started')
     elif command == Commands.GamepadInput:
         """
         Gamepad input
         """
         print('Starting gamepad input handler...')
-        await console.add_manager(manager.InputManager)
         await gamepad_input.input_loop(console)
     elif command == Commands.TextInput:
         """
         Text input
         """
         print('Starting text input handler...')
-        await console.add_manager(manager.TextManager)
         console.text.on_systemtext_configuration += text_input.on_text_config
         console.text.on_systemtext_input += functools.partial(text_input.on_text_input, console)
         console.text.on_systemtext_done += text_input.on_text_done
