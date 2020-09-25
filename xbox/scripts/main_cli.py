@@ -289,9 +289,8 @@ async def cli_discover_consoles(args):
     """
     Discover consoles
     """
-    addr = args.address if args.address else '<MULTICAST>'
-    LOGGER.info(f'Sending discovery packets to IP: {addr}')
-    discovered = await Console.discover(addr=addr, timeout=1)
+    LOGGER.info(f'Sending discovery packets to IP: {args.address}')
+    discovered = await Console.discover(addr=args.address, timeout=1)
 
     if not len(discovered):
         LOGGER.error('No consoles discovered')
@@ -409,7 +408,7 @@ async def main_async(eventloop, command=None):
 
         LOGGER.info('Sending poweron packet for LiveId: {0} to {1}'
                     .format(args.liveid,
-                            'IP: ' + args.address if args.address else '<MULTICAST>'))
+                            'IP: ' + args.address if args.address else 'MULTICAST'))
         await Console.power_on(args.liveid, args.address, tries=10)
         sys.exit(0)
 

@@ -28,7 +28,7 @@ from xbox.sg.utils.struct import XStruct
 LOGGER = logging.getLogger(__name__)
 
 PORT = 5050
-BROADCAST = '<broadcast>'
+BROADCAST = '255.255.255.255'
 MULTICAST = '239.255.255.250'
 
 CHANNEL_MAP = {
